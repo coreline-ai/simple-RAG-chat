@@ -302,12 +302,367 @@ pytest tests/ -v
 
 ## 🗺 로드맵
 
-- [ ] 스트리밍 응답 (SSE) — 체감 응답 시간 개선
-- [ ] 임베딩 캐시 — 중복 임베딩 방지
-- [ ] LLM 팩토리 패턴 — OpenAI/Claude API 지원
-- [ ] 벡터 DB 추상화 — Qdrant/pgvector 교체
-- [ ] 멀티 데이터 소스 — CSV, JSON, DB 직접 연결
-- [ ] 사용자 인증 — JWT 기반
+| 순위 | 기능 | 난이도 | 임팩트 |
+|------|------|--------|--------|
+| 1 | SSE 스트리밍 | ⭐⭐ | 🔥🔥🔥 |
+| 2 | 임베딩 캐시 | ⭐ | 🔥🔥 |
+| 3 | LLM 팩토리 | ⭐⭐ | 🔥🔥🔥 |
+| 4 | 벡터 DB 추상화 | ⭐⭐⭐ | 🔥🔥 |
+| 5 | 멀티 데이터 소스 | ⭐⭐⭐ | 🔥🔥 |
+| 6 | JWT 인증 | ⭐⭐ | 🔥 |
+
+### 1. 스트리밍 응답 (SSE) — 체감 응답 시간 개선
+
+> **현재**: LLM이 답변 전체를 생성할 때까지 15~210초 대기
+> **개선**: 첫 토큰 0.5~2초 내 표시, 체감 대기 시간 95% 감소
+
+SSE(Server-Sent Events)로 토큰이 생성될 때마다 즉시 클라이언트로 전송합니다.
+
+```
+현재: 사용자 → [120초 대기...] → 전체 답변 한번에 표시
+개선: 사용자 → [0.5초] 첫 토큰 → [계속 스트리밍] → 완료
+```
+
+**변경 파일**: `llm.py` (stream: True), `query.py` (StreamingResponse), `index.html` (ReadableStream)
+
+<details>
+<summary>핵심 코드</summary>
+
+```python
+# llm.py - 스트리밍 생성
+async def generate_stream(self, prompt, context):
+    async with httpx.AsyncClient() as client:
+        async with client.stream("POST", f"{self.base_url}/api/generate",
+            json={"model": self.model, "prompt": full_prompt, "stream": True}
+        ) as response:
+            async for line in response.aiter_lines():
+                data = json.loads(line)
+                yield data["response"]
+
+# query.py - SSE 엔드포인트
+@router.post("/query/stream")
+async def query_stream(request: QueryRequest):
+    chunks, analysis = await search_similar_chunks(request.question)
+    context = build_context(chunks)
+
+    async def event_generator():
+        async for token in llm.generate_stream(request.question, context):
+            yield f"data: {json.dumps({'token': token})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+```
+
+```javascript
+// index.html - 클라이언트 수신
+const response = await fetch('/query/stream', { method: 'POST', body: ... });
+const reader = response.body.getReader();
+while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    messageDiv.textContent += parseToken(value);
+}
+```
+
+</details>
+
+---
+
+### 2. 임베딩 캐시 — 중복 임베딩 방지
+
+> **현재**: 같은 질의 반복 시 매번 Ollama에 임베딩 요청 (~100ms/건)
+> **개선**: 2회차부터 <0.1ms (캐시 히트)
+
+텍스트 해시를 키로 LRU 캐시에 임베딩 벡터를 저장합니다.
+
+```
+현재: "서버 배포" → [Ollama 호출 100ms] → 벡터
+개선: "서버 배포" → [캐시 히트 <0.1ms] → 벡터 (2회차부터)
+```
+
+**변경 파일**: `embedding.py` (1개만)
+
+<details>
+<summary>핵심 코드</summary>
+
+```python
+class EmbeddingCache:
+    def __init__(self, max_size=10000):
+        self.cache = OrderedDict()
+        self.max_size = max_size
+
+    def get(self, text: str) -> list[float] | None:
+        key = hashlib.md5(text.encode()).hexdigest()
+        if key in self.cache:
+            self.cache.move_to_end(key)  # LRU 갱신
+            return self.cache[key]
+        return None
+
+    def put(self, text: str, embedding: list[float]):
+        key = hashlib.md5(text.encode()).hexdigest()
+        self.cache[key] = embedding
+        if len(self.cache) > self.max_size:
+            self.cache.popitem(last=False)
+
+_cache = EmbeddingCache()
+
+async def get_embedding(text: str) -> list[float]:
+    cached = _cache.get(text)
+    if cached is not None:
+        return cached
+    embedding = await _call_ollama_embed(text)
+    _cache.put(text, embedding)
+    return embedding
+```
+
+</details>
+
+---
+
+### 3. LLM 팩토리 패턴 — OpenAI/Claude API 지원
+
+> **현재**: OllamaLLM 하드코딩, 응답 15~210초
+> **개선**: `.env` 한 줄로 LLM 교체, OpenAI 사용 시 응답 ~3초
+
+팩토리 패턴으로 설정 값에 따라 LLM 인스턴스를 자동 생성합니다.
+
+```
+.env: LLM_PROVIDER=ollama  → Ollama 로컬 (기본값)
+.env: LLM_PROVIDER=openai  → OpenAI API (GPT-4o-mini)
+.env: LLM_PROVIDER=claude  → Claude API (Sonnet)
+```
+
+**변경 파일**: `llm.py`, `config.py`
+
+<details>
+<summary>핵심 코드</summary>
+
+```python
+class OpenAILLM(BaseLLM):
+    async def generate(self, prompt, context):
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": "채팅 로그 기반 RAG 시스템입니다."},
+                {"role": "user", "content": RAG_PROMPT.format(context=context, prompt=prompt)}
+            ]
+        )
+        return response.choices[0].message.content
+
+class ClaudeLLM(BaseLLM):
+    async def generate(self, prompt, context):
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        message = await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": RAG_PROMPT.format(...)}]
+        )
+        return message.content[0].text
+
+class LLMFactory:
+    @staticmethod
+    def create(provider: str = None) -> BaseLLM:
+        provider = provider or settings.llm_provider
+        match provider:
+            case "ollama":  return OllamaLLM()
+            case "openai":  return OpenAILLM()
+            case "claude":  return ClaudeLLM()
+
+llm = LLMFactory.create()
+```
+
+</details>
+
+---
+
+### 4. 벡터 DB 추상화 — Qdrant/pgvector 교체
+
+> **현재**: ChromaDB 직접 의존, `$gte/$lte` 숫자만 지원 (date_int 우회 필요)
+> **개선**: DB 교체 시 코드 변경 0줄, 설정만 변경
+
+벡터 DB 인터페이스를 추상화하여 구현체만 교체합니다.
+
+```
+현재: retrieval.py → ChromaDB 직접 호출
+개선: retrieval.py → VectorStore 인터페이스 → ChromaStore / QdrantStore / PgVectorStore
+```
+
+**변경 파일**: `database.py`, `retrieval.py`, `query_analyzer.py`
+
+<details>
+<summary>핵심 코드</summary>
+
+```python
+class BaseVectorStore(ABC):
+    @abstractmethod
+    def add(self, ids, documents, embeddings, metadatas): ...
+
+    @abstractmethod
+    def query(self, query_embedding, n_results, where=None) -> dict: ...
+
+    @abstractmethod
+    def get(self, where=None, include=None) -> dict: ...
+
+    @abstractmethod
+    def count(self) -> int: ...
+
+class ChromaVectorStore(BaseVectorStore):
+    """ChromaDB 구현 (현재)"""
+    ...
+
+class QdrantVectorStore(BaseVectorStore):
+    """Qdrant 구현 — 문자열 범위 비교 네이티브 지원"""
+    ...
+
+class PgVectorStore(BaseVectorStore):
+    """PostgreSQL + pgvector — SQL WHERE 자유도"""
+    async def query(self, query_embedding, n_results, where=None):
+        sql = """
+            SELECT *, embedding <=> $1 AS distance
+            FROM chunks
+            WHERE date BETWEEN $2 AND $3 AND room = $4
+            ORDER BY distance LIMIT $5
+        """
+```
+
+**대안 DB 비교:**
+
+| DB | 메타데이터 필터 | 날짜 범위 | 로컬 | 특징 |
+|----|--------------|----------|------|------|
+| ChromaDB (현재) | ✅ | ⚠️ 숫자만 | ✅ | 설치 간편 |
+| Qdrant | ✅ | ✅ 문자열 | ✅/Docker | 필터 성능 우수 |
+| pgvector | ✅ SQL | ✅ 네이티브 | Docker | SQL 자유도 |
+| Milvus | ✅ | ✅ | Docker | 대규모 최적화 |
+| Pinecone | ✅ | ✅ | ❌ 클라우드 | 관리형 |
+
+</details>
+
+---
+
+### 5. 멀티 데이터 소스 — CSV, JSON, DB 직접 연결
+
+> **현재**: `[날짜, 시간, 채팅방, 내용, 사용자]` 형식만 지원
+> **개선**: CSV, JSON, DB 등 다양한 형식 자동 파싱
+
+데이터 소스별 파서를 플러그인 방식으로 추가합니다.
+
+```
+chat_logs.txt → ChatLogParser  ─┐
+data.csv      → CSVParser      ─┼→ 표준 형식 → 임베딩
+data.json     → JSONParser     ─┤
+PostgreSQL    → DBParser       ─┘
+```
+
+**변경 파일**: `services/parsers/` (새 디렉토리), `chunking.py`, `documents.py`
+
+<details>
+<summary>핵심 코드</summary>
+
+```python
+class BaseParser(ABC):
+    @abstractmethod
+    def parse(self, content: str) -> list[dict]:
+        """[{"embedding_text": str, "original": str, "metadata": dict}]"""
+        ...
+
+class CSVParser(BaseParser):
+    def __init__(self, config: dict):
+        self.text_columns = config["text_columns"]       # ["내용"]
+        self.filter_columns = config["filter_columns"]    # ["부서", "작성자"]
+        self.date_column = config.get("date_column")      # "날짜"
+
+    def parse(self, content: str) -> list[dict]:
+        reader = csv.DictReader(io.StringIO(content))
+        results = []
+        for row in reader:
+            text = " ".join(row[col] for col in self.text_columns)
+            filters = " ".join(row[col] for col in self.filter_columns)
+            results.append({
+                "embedding_text": f"{filters}: {text}",
+                "original": str(row),
+                "metadata": {col: row[col] for col in self.filter_columns},
+            })
+        return results
+
+class ParserFactory:
+    @staticmethod
+    def create(file_type: str, config=None) -> BaseParser:
+        match file_type:
+            case "txt":  return ChatLogParser()
+            case "csv":  return CSVParser(config)
+            case "json": return JSONParser(config)
+```
+
+</details>
+
+---
+
+### 6. 사용자 인증 — JWT 기반
+
+> **현재**: 인증 없음 (누구나 API 접근 가능)
+> **개선**: JWT 토큰 기반 인증, 사용자별 접근 제어
+
+로그인 → 토큰 발급 → API 호출 시 토큰 검증 방식입니다.
+
+```
+현재: 브라우저 → API (인증 없음)
+개선: 브라우저 → 로그인 → JWT 발급
+      브라우저 → API + Authorization: Bearer {token} → 검증 → 응답
+```
+
+**변경 파일**: `app/auth/` (새 디렉토리), `main.py`, `config.py`, `index.html`
+
+<details>
+<summary>핵심 코드</summary>
+
+```python
+# auth/jwt.py
+def create_token(user_id: str) -> str:
+    payload = {
+        "sub": user_id,
+        "exp": datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+def verify_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "토큰 만료")
+
+# auth/dependencies.py
+security = HTTPBearer()
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> dict:
+    return verify_token(credentials.credentials)
+
+# api/query.py — 인증 적용
+@router.post("/query")
+async def query(request: QueryRequest, user=Depends(get_current_user)):
+    ...
+
+# api/auth.py — 로그인
+@router.post("/auth/login")
+async def login(username: str, password: str):
+    user = authenticate(username, password)
+    if not user:
+        raise HTTPException(401, "인증 실패")
+    return {"access_token": create_token(user.id), "token_type": "bearer"}
+```
+
+**권한 분리:**
+
+| 역할 | 권한 |
+|------|------|
+| admin | 업로드, 삭제, 질의, 설정 |
+| user | 질의만 |
+
+</details>
 
 ---
 
