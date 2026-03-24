@@ -1,7 +1,7 @@
 """청킹 서비스 단위 테스트"""
 import pytest
 
-from app.services.chunking import chunk_text, parse_chat_line, chunk_chat_by_room
+from app.services.chunking import chunk_chat_by_room, chunk_text, parse_and_format_lines, parse_chat_line
 
 
 class TestParseChatLine:
@@ -16,6 +16,23 @@ class TestParseChatLine:
         assert result["room"] == "개발팀"
         assert result["content"] == "오늘 회의 3시에 시작합니다"
         assert result["user"] == "김민수"
+
+    def test_내용에_쉼표가_있어도_정상_파싱(self):
+        line = "[2024-01-03, 16:31:59, 팀장회의, 안녕하세요, 63 관련 문의드립니다, 김성호]"
+        result = parse_chat_line(line)
+
+        assert result is not None
+        assert result["room"] == "팀장회의"
+        assert result["content"] == "안녕하세요, 63 관련 문의드립니다"
+        assert result["user"] == "김성호"
+
+    def test_내용에_여러_쉼표가_있어도_사용자는_마지막_필드로_파싱(self):
+        line = "[2024-03-01, 10:00:00, 개발팀, 1차, 2차, 3차 공유 부탁드립니다, 이지우]"
+        result = parse_chat_line(line)
+
+        assert result is not None
+        assert result["content"] == "1차, 2차, 3차 공유 부탁드립니다"
+        assert result["user"] == "이지우"
 
     def test_빈_줄(self):
         assert parse_chat_line("") is None
@@ -57,6 +74,13 @@ class TestChunkText:
         text = "한줄\n두줄"
         chunks = chunk_text(text, chunk_size=100, chunk_overlap=10)
         assert len(chunks) == 1
+
+    def test_parse_and_format_lines는_date_int를_포함한다(self):
+        text = "[2024-02-21, 09:00:00, 개발팀, 배포 완료했습니다, 김민수]"
+        results = parse_and_format_lines(text)
+
+        assert len(results) == 1
+        assert results[0]["metadata"]["date_int"] == 20240221
 
 
 class TestChunkChatByRoom:

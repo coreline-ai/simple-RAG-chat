@@ -13,11 +13,13 @@ LLM 2회 호출은 로컬 7B 모델에서 너무 느리므로 (30초+30초),
 - 검색 전략 (vector/metadata/hybrid/aggregate)
 을 자동 추출한다.
 """
-import re
-from datetime import datetime, timedelta
+from __future__ import annotations
 
-from app.config import settings
+import re
+from datetime import date, datetime, timedelta
+
 from app.database import chunks_collection
+from app.services.vector_stores.base import VectorStoreFilter
 
 
 class QueryAnalysis:
@@ -92,6 +94,21 @@ class QueryAnalysis:
             return conditions[0]
         return {"$and": conditions}
 
+    def to_vector_store_filter(self) -> VectorStoreFilter:
+        """벡터 저장소 공통 필터 형식으로 변환
+
+        Returns:
+            VectorStoreFilter 인스턴스
+        """
+        return VectorStoreFilter(
+            room=self.room,
+            user=self.user,
+            date=self.date,
+            date_from=self.date_from,
+            date_to=self.date_to,
+            document_id=None,  # QueryAnalysis에서는 미지원
+        )
+
     def __repr__(self):
         return (
             f"QueryAnalysis(intent={self.intent}, strategy={self.strategy}, "
@@ -103,6 +120,27 @@ class QueryAnalysis:
 
 # === 채팅방 목록 (DB에서 동적 조회 + 캐시) ===
 _room_cache: list[str] | None = None
+_user_cache: list[str] | None = None
+_reference_date_cache: date | None = None
+
+
+def invalidate_query_analyzer_cache() -> None:
+    """쿼리 분석용 메타데이터 캐시 초기화"""
+    global _room_cache, _user_cache, _reference_date_cache
+    _room_cache = None
+    _user_cache = None
+    _reference_date_cache = None
+
+
+def _get_known_metadata_values(field: str) -> list[str]:
+    """ChromaDB 메타데이터에서 고유 값 목록 추출"""
+    all_data = chunks_collection.get(include=["metadatas"], limit=10000)
+    values = set()
+    for meta in all_data["metadatas"]:
+        value = meta.get(field, "")
+        if value:
+            values.add(str(value).strip())
+    return sorted(values, key=len, reverse=True)
 
 
 def _get_known_rooms() -> list[str]:
@@ -112,13 +150,7 @@ def _get_known_rooms() -> list[str]:
         return _room_cache
 
     try:
-        all_data = chunks_collection.get(include=["metadatas"], limit=10000)
-        rooms = set()
-        for meta in all_data["metadatas"]:
-            room = meta.get("room", "")
-            if room:
-                rooms.add(room)
-        _room_cache = sorted(rooms, key=len, reverse=True)  # 긴 이름 우선 매칭
+        _room_cache = _get_known_metadata_values("room")
         return _room_cache
     except Exception:
         return [
@@ -131,14 +163,47 @@ def _get_known_rooms() -> list[str]:
         ]
 
 
-# === 사용자 이름 패턴 ===
-# 한국어 이름: 성(1자) + 이름(2자) = 3자
-# 뒤에 조사(이/가/의/는/을/를/에게/한테)가 오거나 공백/문장끝이어야 함
-_NAME_PATTERN = re.compile(
-    r"(김|이|박|최|정|강|조|윤|장|임|한|오|서|신|권|황|안|송|류|홍)"
-    r"[가-힣]{2}"
-    r"(?=이|가|의|는|을|를|에게|한테|님|\s|$)"
-)
+def _get_known_users() -> list[str]:
+    """ChromaDB에서 실제 사용자 이름 목록을 동적으로 추출 (캐시)"""
+    global _user_cache
+    if _user_cache is not None:
+        return _user_cache
+
+    try:
+        _user_cache = _get_known_metadata_values("user")
+        return _user_cache
+    except Exception:
+        return []
+
+
+def _get_reference_today() -> date:
+    """상대 날짜 해석 기준일
+
+    데이터가 있으면 최신 날짜를 기준으로 삼고, 없으면 시스템 오늘 날짜를 사용한다.
+    """
+    global _reference_date_cache
+    if _reference_date_cache is not None:
+        return _reference_date_cache
+
+    try:
+        all_data = chunks_collection.get(include=["metadatas"], limit=10000)
+        parsed_dates = []
+        for meta in all_data["metadatas"]:
+            raw_date = meta.get("date")
+            if not raw_date:
+                continue
+            try:
+                parsed_dates.append(datetime.strptime(str(raw_date), "%Y-%m-%d").date())
+            except ValueError:
+                continue
+        if parsed_dates:
+            _reference_date_cache = max(parsed_dates)
+            return _reference_date_cache
+    except Exception:
+        pass
+
+    _reference_date_cache = datetime.now().date()
+    return _reference_date_cache
 
 
 # === 의도 분류 키워드 ===
@@ -179,11 +244,13 @@ async def analyze_query(query: str) -> QueryAnalysis:
             filters["date"] = f"{y}-{mo.zfill(2)}-{d.zfill(2)}"
             clean_query = clean_query.replace(m.group(0), "")
 
+    reference_today = _get_reference_today()
+
     # 월 범위: YYYY년 M월 또는 M월
     if "date" not in filters:
         m = re.search(r"(?:(\d{4})년\s*)?(\d{1,2})월", query)
         if m:
-            year = int(m.group(1)) if m.group(1) else 2024
+            year = int(m.group(1)) if m.group(1) else reference_today.year
             month = int(m.group(2))
             if 1 <= month <= 12:
                 filters["date_from"] = f"{year}-{str(month).zfill(2)}-01"
@@ -196,14 +263,31 @@ async def analyze_query(query: str) -> QueryAnalysis:
                 clean_query = clean_query.replace(m.group(0), "")
 
     # 상대 날짜: 오늘, 어제, 이번 주, 최근
-    today = datetime(2026, 3, 24)  # 데이터 기준일
-    if "최근" in query or "이번 주" in query:
-        filters["date_from"] = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        filters["date_to"] = today.strftime("%Y-%m-%d")
+    recent_pattern = re.search(r"최근(?:에)?(?:\s*(\d+)\s*(일|주|개월|달))?", query)
+    if "이번 주" in query or "이번주" in query:
+        week_start = reference_today - timedelta(days=reference_today.weekday())
+        filters["date_from"] = week_start.strftime("%Y-%m-%d")
+        filters["date_to"] = reference_today.strftime("%Y-%m-%d")
+        clean_query = clean_query.replace("이번 주", "")
+        clean_query = clean_query.replace("이번주", "")
+    elif recent_pattern:
+        amount_raw, unit = recent_pattern.groups()
+        amount = int(amount_raw) if amount_raw else 7
+        if unit == "주":
+            days = amount * 7
+        elif unit in {"개월", "달"}:
+            days = amount * 30
+        else:
+            days = amount
+        filters["date_from"] = (reference_today - timedelta(days=days)).strftime("%Y-%m-%d")
+        filters["date_to"] = reference_today.strftime("%Y-%m-%d")
+        clean_query = clean_query.replace(recent_pattern.group(0), "")
     elif "오늘" in query:
-        filters["date"] = today.strftime("%Y-%m-%d")
+        filters["date"] = reference_today.strftime("%Y-%m-%d")
+        clean_query = clean_query.replace("오늘", "")
     elif "어제" in query:
-        filters["date"] = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+        filters["date"] = (reference_today - timedelta(days=1)).strftime("%Y-%m-%d")
+        clean_query = clean_query.replace("어제", "")
 
     # --- 2. 채팅방 매칭 ---
     known_rooms = _get_known_rooms()
@@ -214,28 +298,16 @@ async def analyze_query(query: str) -> QueryAnalysis:
             break
 
     # --- 3. 사용자 이름 감지 ---
-    # "이름을", "이번에", "이런" 등 일반 단어를 제외
-    _NOT_NAMES = {
-        "이름을", "이름이", "이름은", "이름의", "이름",
-        "이번에", "이번은", "이번의", "이번",
-        "이런게", "이런걸", "이런식", "이런",
-        "이전에", "이전의", "이전", "이후에", "이후의", "이후",
-        "이상이", "이상의", "이상은", "이상",
-        "이하의", "이하", "이유는", "이유를", "이유",
-        "이것은", "이것이", "이것", "이미",
-        "임원회", "임원회의",
-    }
-    name_match = _NAME_PATTERN.search(query)
-    if name_match:
-        name = name_match.group(0)
-        # 원본 텍스트에서 매칭된 위치의 전체 단어 확인
-        start = name_match.start()
-        end = name_match.end()
-        # 뒤에 1글자까지 포함하여 일반 단어인지 확인
-        extended = query[start:min(end + 1, len(query))]
-        if name not in _NOT_NAMES and extended not in _NOT_NAMES:
-            filters["user"] = name
-            clean_query = clean_query.replace(name, "")
+    known_users = _get_known_users()
+    for user in known_users:
+        user_pattern = re.compile(
+            rf"(?<![가-힣]){re.escape(user)}(?:님|씨|이|가|은|는|을|를|의)?(?=\s|$)"
+        )
+        match = user_pattern.search(query)
+        if match:
+            filters["user"] = user
+            clean_query = clean_query.replace(match.group(0), "")
+            break
 
     # --- 4. 의도 분류 ---
     intent = "search"

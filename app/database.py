@@ -1,24 +1,22 @@
-"""ChromaDB + JSON 기반 저장소 관리
+"""벡터 DB + JSON 기반 저장소 관리
 
-- chunks_collection: ChromaDB 벡터 저장소 (Ollama 임베딩 직접 전달)
+- vector_store: 벡터 저장소 (설정에 따라 ChromaDB 등 선택 가능)
+- chunks_collection: vector_store의 별칭 (하위 호환성)
 - documents_store: JSON 파일 기반 문서 메타데이터 저장소
 """
+from __future__ import annotations
+
 import json
 import os
 
-import chromadb
-
 from app.config import settings as app_settings
+from app.services.vector_stores.factory import VectorStoreFactory
 
-# ChromaDB 클라이언트 (벡터 검색용)
-_client = chromadb.PersistentClient(path=app_settings.chroma_persist_dir)
+# 벡터 저장소 인스턴스 (팩토리로 생성)
+vector_store = VectorStoreFactory.create()
 
-# 청크 벡터 저장용 컬렉션 (임베딩은 외부에서 직접 전달)
-chunks_collection = _client.get_or_create_collection(
-    name="chunks",
-    metadata={"hnsw:space": "cosine"},
-    embedding_function=None,
-)
+# 하위 호환성을 위한 별칭
+chunks_collection = vector_store
 
 
 # === JSON 기반 문서 메타데이터 저장소 ===

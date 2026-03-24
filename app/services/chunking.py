@@ -3,7 +3,7 @@
 채팅 로그 형식: [날짜, 시간, 채팅방이름, 입력내용, 사용자]
 정형 데이터의 구조를 활용하여 1줄 = 1임베딩 + 메타데이터로 처리한다.
 """
-import re
+from __future__ import annotations
 
 from app.config import settings
 
@@ -14,19 +14,34 @@ def parse_chat_line(line: str) -> dict | None:
     if not line:
         return None
 
-    match = re.match(
-        r"\[(\d{4}-\d{2}-\d{2}),\s*(\d{2}:\d{2}:\d{2}),\s*(.+?),\s*(.+?),\s*(.+?)\]",
-        line,
-    )
-    if not match:
+    if not (line.startswith("[") and line.endswith("]")):
+        return None
+
+    body = line[1:-1]
+    parts = body.split(",", maxsplit=2)
+    if len(parts) != 3:
+        return None
+
+    date_part, time_part, remainder = [part.strip() for part in parts]
+    room_and_content = remainder.split(",", maxsplit=1)
+    if len(room_and_content) != 2:
+        return None
+
+    room, content_and_user = [part.strip() for part in room_and_content]
+    content_and_user_parts = content_and_user.rsplit(",", maxsplit=1)
+    if len(content_and_user_parts) != 2:
+        return None
+
+    content, user = [part.strip() for part in content_and_user_parts]
+    if not all([date_part, time_part, room, content, user]):
         return None
 
     return {
-        "date": match.group(1),
-        "time": match.group(2),
-        "room": match.group(3).strip(),
-        "content": match.group(4).strip(),
-        "user": match.group(5).strip(),
+        "date": date_part,
+        "time": time_part,
+        "room": room,
+        "content": content,
+        "user": user,
     }
 
 
@@ -63,6 +78,7 @@ def parse_and_format_lines(text: str) -> list[dict]:
                 "room": parsed["room"],
                 "user": parsed["user"],
                 "date": parsed["date"],
+                "date_int": int(parsed["date"].replace("-", "")),
                 "time": parsed["time"],
             },
         })

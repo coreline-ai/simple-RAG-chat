@@ -1,4 +1,6 @@
 """Pydantic 요청/응답 스키마"""
+from typing import Optional
+
 from pydantic import BaseModel
 
 
@@ -15,7 +17,7 @@ class ChunkResponse(BaseModel):
     id: str
     chunk_index: int
     content: str
-    score: float | None = None
+    score: Optional[float] = None
 
 
 class DocumentResponse(BaseModel):
@@ -37,7 +39,7 @@ class DocumentListResponse(BaseModel):
 class QueryRequest(BaseModel):
     """질의 요청"""
     question: str
-    top_k: int | None = None
+    top_k: Optional[int] = None
 
 
 class QueryResponse(BaseModel):

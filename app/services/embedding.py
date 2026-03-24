@@ -2,6 +2,8 @@
 
 Ollama의 nomic-embed-text 모델을 사용하여 텍스트를 벡터로 변환한다.
 """
+from __future__ import annotations
+
 import httpx
 
 from app.config import settings

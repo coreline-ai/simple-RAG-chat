@@ -11,6 +11,7 @@ from app.database import add_document, chunks_collection, delete_document, get_d
 from app.schemas import DocumentListResponse, DocumentResponse, DocumentUploadRequest
 from app.services.chunking import parse_and_format_lines
 from app.services.embedding import get_embeddings
+from app.services.query_analyzer import invalidate_query_analyzer_cache
 
 router = APIRouter(prefix="/documents", tags=["문서 관리"])
 
@@ -51,6 +52,7 @@ async def _process_and_store(filename: str, content: str) -> dict:
                 "room": item["metadata"]["room"],
                 "user": item["metadata"]["user"],
                 "date": item["metadata"]["date"],
+                "date_int": item["metadata"]["date_int"],
                 "time": item["metadata"]["time"],
                 "original": item["original"],
             }
@@ -63,6 +65,8 @@ async def _process_and_store(filename: str, content: str) -> dict:
             embeddings=embeddings,
             metadatas=metadatas,
         )
+
+    invalidate_query_analyzer_cache()
 
     return {
         "id": doc_id,
@@ -115,6 +119,15 @@ async def get_document_detail(document_id: str):
 @router.delete("/{document_id}", status_code=204)
 async def remove_document(document_id: str):
     """문서 및 관련 데이터 삭제"""
-    if not delete_document(document_id):
+    if not get_document(document_id):
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다")
-    chunks_collection.delete(where={"document_id": document_id})
+
+    try:
+        chunks_collection.delete(where={"document_id": document_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"문서 청크 삭제 실패: {e}") from e
+
+    if not delete_document(document_id):
+        raise HTTPException(status_code=500, detail="문서 메타데이터 삭제에 실패했습니다")
+
+    invalidate_query_analyzer_cache()

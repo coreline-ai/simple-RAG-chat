@@ -48,7 +48,7 @@ async def upload_chat_logs():
                 "room": item["metadata"]["room"],
                 "user": item["metadata"]["user"],
                 "date": item["metadata"]["date"],
-                "date_int": int(item["metadata"]["date"].replace("-", "")),  # 20240221 형식 (범위 검색용)
+                "date_int": item["metadata"]["date_int"],
                 "time": item["metadata"]["time"],
                 "original": item["original"],
             }

@@ -3,12 +3,23 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Ollama 설정
+    # Ollama 설정 (기존, 하위 호환성 유지)
     ollama_base_url: str = "http://localhost:11434"
     llm_model: str = "qwen2.5-coder:7b"
     embedding_model: str = "bge-m3"
 
-    # ChromaDB 설정
+    # LLM 제공자 설정
+    # 지원 가능한 값: ollama (기본값), claude, codex
+    llm_provider: str = "ollama"
+
+    # CLIProxyAPI 프록시 설정 (claude/codex 사용 시 필요)
+    proxy_api_url: str = "http://localhost:8080"
+    proxy_api_key: str = ""
+    claude_model: str = "claude-sonnet-latest"
+    codex_model: str = "gpt-5-codex"
+
+    # 벡터 DB 설정
+    vector_db_type: str = "chroma"
     chroma_persist_dir: str = "./chroma_db"
 
     # 청킹 설정 (라인 수 기준)

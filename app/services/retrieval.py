@@ -12,6 +12,7 @@ LLM 쿼리 분석기를 통해 질의 의도를 파악하고,
      - aggregate: 메타데이터 그룹핑/집계 (통계)
   3. 결과를 채팅방별 그룹핑하여 반환
 """
+from __future__ import annotations
 
 from app.config import settings
 from app.database import chunks_collection
