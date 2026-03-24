@@ -10,6 +10,8 @@
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-0.6-FF6F00?style=for-the-badge)](https://www.trychroma.com)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
+<img width="782" height="669" alt="image" src="https://github.com/user-attachments/assets/838655a0-b864-4c31-b75d-cee8473b83cd" />
+
 외부 API 키 없이, 로컬 LLM만으로 동작하는 RAG(Retrieval-Augmented Generation) 시스템입니다.
 채팅 로그와 같은 **정형 데이터**에 최적화된 임베딩 전략과 **스마트 쿼리 라우팅**을 제공합니다.
 
