@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.database import add_document, chunks_collection
-from app.services.chunking import parse_and_format_lines
+from app.services.chunking import parse_and_format
 from app.services.embedding import get_embeddings
 
 
@@ -15,9 +15,10 @@ async def upload_chat_logs():
     with open("data/chat_logs.txt", "r", encoding="utf-8") as f:
         content = f.read()
 
-    # 라인 단위 파싱
-    parsed_lines = parse_and_format_lines(content)
-    print(f"파싱된 라인: {len(parsed_lines)}건")
+    # 전략에 따른 파싱 (config.chunking_strategy 기반)
+    from app.config import settings
+    parsed_lines = parse_and_format(content)
+    print(f"파싱된 청크: {len(parsed_lines)}건 (전략: {settings.chunking_strategy})")
 
     doc_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()

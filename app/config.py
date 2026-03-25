@@ -22,9 +22,19 @@ class Settings(BaseSettings):
     vector_db_type: str = "chroma"
     chroma_persist_dir: str = "./chroma_db"
 
-    # 청킹 설정 (라인 수 기준)
+    # 청킹 설정
     chunk_size: int = 20
     chunk_overlap: int = 5
+    chunking_strategy: str = "line"  # "line" | "session" | "kss"
+    session_gap_minutes: int = 30
+    session_max_lines: int = 10
+    kss_min_length: int = 80  # 이 길이 이상만 KSS 문장 분할
+
+    # 쿼리 분석 설정
+    use_kiwi_keywords: bool = True  # kiwipiepy 형태소 분석 키워드 추출
+
+    # 임베딩 캐시
+    embedding_cache_enabled: bool = True
 
     # 검색 설정
     top_k: int = 5

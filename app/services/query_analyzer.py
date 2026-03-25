@@ -12,14 +12,61 @@ LLM 2회 호출은 로컬 7B 모델에서 너무 느리므로 (30초+30초),
 - 질의 의도 (검색/요약/목록/통계)
 - 검색 전략 (vector/metadata/hybrid/aggregate)
 을 자동 추출한다.
+
+한국어 최적화:
+- kiwipiepy 형태소 분석으로 조사/어미 제거, 핵심 키워드 추출
 """
 from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
 
+from app.config import settings
 from app.database import chunks_collection
 from app.services.vector_stores.base import VectorStoreFilter
+
+
+# === kiwipiepy 형태소 분석 (지연 로딩) ===
+
+_kiwi = None
+
+# 제거할 품사: 조사, 어미, 부호
+_STOPWORD_POS = {
+    "JKS", "JKC", "JKG", "JKO", "JKB", "JKV", "JKQ", "JX", "JC",  # 조사
+    "EP", "EF", "EC", "ETN", "ETM",  # 어미
+    "SF", "SP", "SS", "SE", "SO",  # 부호
+}
+
+
+def _get_kiwi():
+    """kiwipiepy 인스턴스 지연 로딩"""
+    global _kiwi
+    if _kiwi is None:
+        try:
+            from kiwipiepy import Kiwi
+            _kiwi = Kiwi()
+        except ImportError:
+            _kiwi = False  # 설치 안 된 경우
+    return _kiwi
+
+
+def extract_keywords(text: str) -> str:
+    """형태소 분석으로 핵심 키워드 추출 (불용어 제거)
+
+    조사(은/는/이/가), 어미(-했다/-합니다) 등을 제거하여
+    벡터 검색의 정밀도를 높인다.
+    """
+    kiwi = _get_kiwi()
+    if not kiwi:
+        return text
+
+    try:
+        tokens = kiwi.tokenize(text)
+        keywords = [t.form for t in tokens if t.tag not in _STOPWORD_POS]
+        result = " ".join(keywords)
+        return result if result.strip() else text
+    except Exception:
+        return text
 
 
 class QueryAnalysis:
@@ -338,6 +385,10 @@ async def analyze_query(query: str) -> QueryAnalysis:
     search_text = re.sub(r"\s+", " ", clean_query).strip()
     if not search_text:
         search_text = query  # 원본 질의를 폴백으로 사용
+
+    # kiwipiepy 형태소 분석으로 불용어 제거 (조사/어미 제거)
+    if settings.use_kiwi_keywords:
+        search_text = extract_keywords(search_text)
 
     analysis = QueryAnalysis({
         "intent": intent,

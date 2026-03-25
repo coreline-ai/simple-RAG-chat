@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, UploadFile
 
 from app.database import add_document, chunks_collection, delete_document, get_document, list_documents
 from app.schemas import DocumentListResponse, DocumentResponse, DocumentUploadRequest
-from app.services.chunking import parse_and_format_lines
+from app.services.chunking import parse_and_format
 from app.services.embedding import get_embeddings
 from app.services.query_analyzer import invalidate_query_analyzer_cache
 
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/documents", tags=["문서 관리"])
 
 async def _process_and_store(filename: str, content: str) -> dict:
     """문서 처리: 라인 파싱 → 임베딩 → 메타데이터와 함께 저장"""
-    parsed_lines = parse_and_format_lines(content)
+    parsed_lines = parse_and_format(content)
     if not parsed_lines:
         raise HTTPException(status_code=400, detail="파싱 가능한 채팅 라인이 없습니다")
 
