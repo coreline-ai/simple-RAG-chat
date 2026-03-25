@@ -73,6 +73,7 @@ class QueryAnalysis:
     """쿼리 분석 결과"""
 
     def __init__(self, raw: dict):
+        self.original_query = raw.get("original_query", "")
         self.intent = raw.get("intent", "search")
         self.filters = raw.get("filters", {})
         self.search_text = raw.get("search_text", "")
@@ -299,6 +300,17 @@ _INTENT_KEYWORDS = {
     "search": [],  # 기본값
 }
 
+_ROSTER_TARGET_KEYWORDS = ("팀", "팀원", "구성원", "멤버", "참여자", "담당자")
+_ROSTER_LIST_KEYWORDS = ("모두", "전체", "전원", "목록", "리스트", "누구", "이름")
+
+
+def _looks_like_roster_query(query: str) -> bool:
+    """'팀 전체/담당자 목록'처럼 전수 목록을 원하는 질의인지 감지"""
+    return (
+        any(keyword in query for keyword in _ROSTER_TARGET_KEYWORDS)
+        and any(keyword in query for keyword in _ROSTER_LIST_KEYWORDS)
+    )
+
 
 async def analyze_query(query: str) -> QueryAnalysis:
     """규칙 기반 쿼리 분석 (LLM 불필요, <1ms)
@@ -429,13 +441,17 @@ async def analyze_query(query: str) -> QueryAnalysis:
         if intent != "search":
             break
 
+    wants_roster = _looks_like_roster_query(query)
+    if intent == "search" and wants_roster:
+        intent = "list"
+
     # --- 5. 검색 전략 결정 ---
     has_filters = bool(filters)
     has_content_keywords = bool(clean_query.strip())
 
     if intent == "aggregate":
         strategy = "aggregate"
-    elif intent == "list" and has_filters:
+    elif intent == "list" and (has_filters or wants_roster):
         strategy = "aggregate"  # 목록도 집계와 비슷하게 처리
     elif has_filters and has_content_keywords:
         strategy = "hybrid"
@@ -454,6 +470,7 @@ async def analyze_query(query: str) -> QueryAnalysis:
         search_text = extract_keywords(search_text)
 
     analysis = QueryAnalysis({
+        "original_query": query,
         "intent": intent,
         "filters": filters,
         "search_text": search_text,

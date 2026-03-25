@@ -9,6 +9,7 @@ from app.services import query_analyzer as qa
 def _stub_common(monkeypatch):
     monkeypatch.setattr(qa, "_get_known_rooms", lambda: ["개발팀", "QA팀"])
     monkeypatch.setattr(qa, "_get_known_users", lambda: ["조하윤", "안지우", "김성호"])
+    monkeypatch.setattr(qa, "_get_known_assignees", lambda: ["Hyunwoo", "Seoyeon", "Taehun"])
 
 
 @pytest.mark.asyncio
@@ -57,3 +58,14 @@ async def test_연도없는_월은_데이터_기준연도를_사용한다(monkey
 
     assert analysis.date_from == "2025-03-01"
     assert analysis.date_to == "2025-03-31"
+
+
+@pytest.mark.asyncio
+async def test_팀_전체_질문은_목록_집계로_처리한다(monkeypatch):
+    _stub_common(monkeypatch)
+    monkeypatch.setattr(qa, "_get_reference_today", lambda: date(2026, 3, 24))
+
+    analysis = await qa.analyze_query("현재 팀 모두 알려줘")
+
+    assert analysis.intent == "list"
+    assert analysis.strategy == "aggregate"

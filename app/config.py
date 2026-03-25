@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     proxy_api_key: str = ""
     claude_model: str = "claude-sonnet-latest"
     codex_model: str = "gpt-5-codex"
+    llm_routing_mode: str = "stable"  # stable | fastest | proxy_only | direct_only
+    codex_proxy_enabled: bool = True
+    codex_direct_enabled: bool = True
+    codex_direct_base_url: str = "https://chatgpt.com/backend-api"
+    codex_auth_path: str = "~/.codex/auth.json"
+    codex_fallback_auth_path: str = "~/.chatgpt-codex-proxy/tokens.json"
+    llm_selftest_on_startup: bool = False
+    llm_warmup_on_startup: bool = False
 
     # 벡터 DB 설정
     vector_db_type: str = "chroma"

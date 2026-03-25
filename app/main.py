@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.documents import router as documents_router
 from app.api.query import router as query_router
-from app.services.llm import get_llm_status
+from app.services.llm import get_llm_status, initialize_llm_runtime
 
 app = FastAPI(
     title="Simple RAG Chat",
@@ -31,6 +31,12 @@ app.include_router(query_router)
 # 정적 파일 서빙
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.on_event("startup")
+async def initialize_llm():
+    """선택된 LLM runtime 초기화."""
+    await initialize_llm_runtime()
 
 
 @app.get("/", tags=["상태"])

@@ -17,7 +17,7 @@
 - LLM provider
   - `ollama`: `qwen2.5-coder:7b`
   - `claude`: OpenAI 호환 프록시 경유
-  - `codex`: OpenAI 호환 프록시 경유
+  - `codex`: 로컬 게이트웨이(`proxy` / `direct` / `fastest`)
 
 ## 핵심 구조
 
@@ -31,7 +31,7 @@ app/
     embedding.py      Ollama 임베딩
     query_analyzer.py 규칙 기반 질의 분석
     retrieval.py      vector / metadata / hybrid / aggregate 검색
-    llm.py            OllamaLLM, ProxyLLM, /health/llm 상태 확인
+    llm.py            OllamaLLM, ProxyLLM, CodexDirectLLM, GatewayLLM
     vector_stores/    벡터 저장소 추상화
   config.py           Settings
   database.py         ChromaDB + documents.json
@@ -42,6 +42,7 @@ tests/
   test_query_analyzer.py
   test_documents.py
   test_llm_proxy.py
+  test_llm_gateway.py
 ```
 
 ## 데이터 규칙
@@ -74,4 +75,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `GET /health`
 - `GET /health/llm`
 
-`/health/llm`은 현재 provider, configured model, 모델 목록, 경고를 반환한다.
+`/health/llm`은 현재 provider, configured model, `routing_mode`, `selected_transport`,
+transport별 metrics와 경고를 반환한다.
+
+## Codex 게이트웨이 메모
+
+- `LLM_PROVIDER=codex`일 때 `proxy`와 `direct`를 함께 가진 게이트웨이가 동작한다.
+- `LLM_ROUTING_MODE`
+  - `stable`: `proxy` 우선, 실패 시 `direct`
+  - `fastest`: 최근 latency 기준으로 선택
+  - `proxy_only`, `direct_only`: 단일 transport 강제
+- `direct`는 기본적으로 `~/.codex/auth.json`을 사용하고, 필요 시 refresh token을 갱신한다.
+- `LLM_WARMUP_ON_STARTUP=true`면 startup 시 warmup을 수행해 `fastest` 초반 선택 편향을 줄인다.

@@ -41,7 +41,11 @@ async def query(request: QueryRequest):
     # 분석 메타정보를 컨텍스트에 추가 (LLM이 더 정확하게 답변하도록)
     meta_hint = ""
     if analysis.intent == "list":
-        meta_hint = "\n\n[힌트: 사용자가 목록/나열을 원합니다. 중복 없이 정리해주세요.]"
+        meta_hint = (
+            "\n\n[힌트: 사용자가 목록/나열을 원합니다. "
+            "컨텍스트에 있는 후보를 중복 없이 모두 정리하고, "
+            "전수 목록이 아닐 수 있으면 그 점을 명시해주세요.]"
+        )
     elif analysis.intent == "aggregate":
         meta_hint = "\n\n[힌트: 사용자가 통계/집계를 원합니다. 숫자와 함께 정리해주세요.]"
     elif analysis.intent == "summary":
@@ -97,7 +101,11 @@ async def query_stream(request: QueryRequest):
     # 분석 메타정보를 컨텍스트에 추가
     meta_hint = ""
     if analysis.intent == "list":
-        meta_hint = "\n\n[힌트: 사용자가 목록/나열을 원합니다. 중복 없이 정리해주세요.]"
+        meta_hint = (
+            "\n\n[힌트: 사용자가 목록/나열을 원합니다. "
+            "컨텍스트에 있는 후보를 중복 없이 모두 정리하고, "
+            "전수 목록이 아닐 수 있으면 그 점을 명시해주세요.]"
+        )
     elif analysis.intent == "aggregate":
         meta_hint = "\n\n[힌트: 사용자가 통계/집계를 원합니다. 숫자와 함께 정리해주세요.]"
     elif analysis.intent == "summary":

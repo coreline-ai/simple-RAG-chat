@@ -30,6 +30,7 @@
 | 🏷️ **행동 라벨링 + KSS** | 엑셀 이슈의 서술형 분석 텍스트를 행동 단위로 분할하여 검색 정확도 향상 |
 | 💾 **임베딩 캐시** | LRU 캐시로 중복 임베딩 방지, 2회차부터 <0.1ms |
 | 🌐 **LLM 팩토리** | Ollama / Claude / Codex 프록시를 `.env` 한 줄로 전환 |
+| 🚦 **Codex 게이트웨이 라우팅** | `proxy` / `direct` / `fastest` / 단일 강제 모드 지원 |
 | ⚡ **SSE 스트리밍** | 토큰 단위 실시간 스트리밍으로 체감 응답 시간 95% 개선 |
 | 🌙 **채팅 UI** | 다크 테마, LLM 상태 표시, 출처 접기/펼치기 |
 | 📝 **한글 우선** | 코드 주석, 응답, 로그 모두 한글 |
@@ -244,13 +245,14 @@ LLM_MODEL=qwen2.5-coder:7b
 EMBEDDING_MODEL=bge-m3
 ```
 
-### Codex 프록시 모드
+### Codex 게이트웨이 모드
 
 ```env
 LLM_PROVIDER=codex
 PROXY_API_URL=http://localhost:8080
 PROXY_API_KEY=your-cli-proxy-api-key
 CODEX_MODEL=gpt-5-codex
+LLM_ROUTING_MODE=stable
 ```
 
 ### Claude 프록시 모드
@@ -263,6 +265,20 @@ CLAUDE_MODEL=claude-sonnet-latest
 ```
 
 > 프록시 모드에서도 임베딩은 Ollama `bge-m3`를 사용합니다.
+
+### Codex 라우팅 모드
+
+`LLM_PROVIDER=codex`일 때 다음 모드를 지원합니다.
+
+| 모드 | 설명 |
+|------|------|
+| `stable` | `proxy` 우선, 실패 시 `direct` fallback |
+| `fastest` | 최근 latency 기준으로 더 빠른 transport 선택 |
+| `proxy_only` | OpenAI 호환 프록시만 사용 |
+| `direct_only` | ChatGPT Codex backend direct만 사용 |
+
+개인 개발 머신에서 `direct`를 쓰려면 `~/.codex/auth.json`이 필요합니다.  
+`LLM_WARMUP_ON_STARTUP=true`를 주면 startup 시 warmup을 수행해 `fastest`가 초반부터 더 안정적으로 선택됩니다.
 
 ---
 
@@ -284,7 +300,7 @@ simple-RAG-chat/
 │   │   ├── embedding_cache.py     # LRU 임베딩 캐시
 │   │   ├── query_analyzer.py      # 규칙 기반 쿼리 분석 + kiwipiepy
 │   │   ├── retrieval.py           # 4가지 검색 전략 라우터
-│   │   ├── llm.py                 # LLM 팩토리 (Ollama/Proxy)
+│   │   ├── llm.py                 # LLM 팩토리 + Codex gateway(proxy/direct)
 │   │   ├── parsers/
 │   │   │   ├── base.py            # BaseParser 인터페이스
 │   │   │   ├── factory.py         # ParserFactory (파일 확장자 자동 감지)
@@ -308,7 +324,8 @@ simple-RAG-chat/
 │   ├── test_chunking.py           # 청킹 단위 테스트
 │   ├── test_query_analyzer.py     # 쿼리 분석기 테스트
 │   ├── test_documents.py          # 문서 API 테스트
-│   └── test_llm_proxy.py          # 프록시 LLM 테스트
+│   ├── test_llm_proxy.py          # 프록시 LLM 테스트
+│   └── test_llm_gateway.py        # Codex gateway 라우팅 테스트
 ├── generate_data.py               # 샘플 데이터 생성기
 ├── upload_data.py                 # 일괄 임베딩 업로드
 ├── requirements.txt               # Python 의존성
@@ -361,7 +378,9 @@ simple-RAG-chat/
 | Method | Endpoint | 설명 |
 |--------|----------|------|
 | `GET` | `/health` | 서버 상태 |
-| `GET` | `/health/llm` | LLM provider/model/상태 |
+| `GET` | `/health/llm` | provider/model/라우팅/transport 상태 |
+
+`/health/llm` 응답에는 `routing_mode`, `selected_transport`, transport별 `metrics`가 포함됩니다.
 
 ---
 
@@ -376,6 +395,7 @@ pytest -q
 - 사용자 이름 오탐 방지 및 상대 날짜 해석
 - 문서 삭제 API 동작
 - 프록시 LLM 인증 헤더, 직렬화, 재시도, 스트리밍 오류 처리
+- Codex gateway 라우팅, fallback, auth 파싱, fastest 모드
 
 ---
 
@@ -390,7 +410,15 @@ pytest -q
 | `PROXY_API_URL` | `http://localhost:8080` | OpenAI 호환 프록시 주소 |
 | `PROXY_API_KEY` | 빈 값 | 프록시 Bearer 토큰 |
 | `CLAUDE_MODEL` | `claude-sonnet-latest` | Claude 프록시 모델명 |
-| `CODEX_MODEL` | `gpt-5-codex` | Codex 프록시 모델명 |
+| `CODEX_MODEL` | `gpt-5-codex` | Codex 모델명 |
+| `LLM_ROUTING_MODE` | `stable` | `stable` / `fastest` / `proxy_only` / `direct_only` |
+| `CODEX_PROXY_ENABLED` | `true` | Codex 프록시 transport 활성화 |
+| `CODEX_DIRECT_ENABLED` | `true` | Codex direct transport 활성화 |
+| `CODEX_DIRECT_BASE_URL` | `https://chatgpt.com/backend-api` | Codex direct backend 주소 |
+| `CODEX_AUTH_PATH` | `~/.codex/auth.json` | Codex CLI auth 파일 경로 |
+| `CODEX_FALLBACK_AUTH_PATH` | `~/.chatgpt-codex-proxy/tokens.json` | Codex fallback auth 경로 |
+| `LLM_WARMUP_ON_STARTUP` | `false` | startup warmup 수행 여부 |
+| `LLM_SELFTEST_ON_STARTUP` | `false` | startup self-test/warmup 수행 여부 |
 | `VECTOR_DB_TYPE` | `chroma` | 벡터 저장소 타입 |
 | `CHROMA_PERSIST_DIR` | `./chroma_db` | Chroma 저장 경로 |
 | `CHUNKING_STRATEGY` | `line` | `line` / `session` / `kss` |
@@ -414,6 +442,10 @@ uvicorn app.main:app --port 8001
 ### 프록시 연결됐는데 답변 실패
 - `/health/llm`의 `configured_model`이 `/v1/models`에 있는지 확인
 - `unknown provider for model ...` → 프록시 alias 또는 upstream 설정 문제
+
+### `fastest`인데 처음엔 느린 transport를 고르는 경우
+- `LLM_WARMUP_ON_STARTUP=true`로 startup warmup 활성화
+- `/health/llm`에서 `selected_transport`와 transport별 `avg_total_ms` 확인
 
 ### 프록시 모드에서 임베딩 실패
 - 프록시는 답변 생성 전용. 임베딩은 Ollama `bge-m3` 필수

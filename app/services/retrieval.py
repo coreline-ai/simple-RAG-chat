@@ -14,6 +14,8 @@ LLM 쿼리 분석기를 통해 질의 의도를 파악하고,
 """
 from __future__ import annotations
 
+from collections import Counter
+
 from app.config import settings
 from app.database import chunks_collection
 from app.services.embedding import get_embedding
@@ -94,6 +96,9 @@ async def _search_metadata(analysis: QueryAnalysis, top_k: int) -> list[dict]:
             "score": 1.0,  # 메타데이터 정확 매칭
             "room": meta.get("room", "unknown"),
             "user": meta.get("user", ""),
+            "assignee": meta.get("assignee", ""),
+            "status": meta.get("status", ""),
+            "doc_type": meta.get("doc_type", ""),
             "date": meta.get("date", ""),
             "time": meta.get("time", ""),
         })
@@ -164,36 +169,70 @@ async def _search_aggregate(analysis: QueryAnalysis, top_k: int) -> list[dict]:
             "score": 1.0,
             "room": meta.get("room", "unknown"),
             "user": meta.get("user", ""),
+            "assignee": meta.get("assignee", ""),
+            "status": meta.get("status", ""),
+            "doc_type": meta.get("doc_type", ""),
             "date": meta.get("date", ""),
             "time": meta.get("time", ""),
         })
 
     # 시간순 정렬 후 샘플링 (전체를 LLM에 넘기면 너무 큼)
     items.sort(key=lambda x: (x["date"], x["time"]))
-
-    # 집계용: 대표 샘플 + 통계 정보 추가
     total_count = len(items)
 
-    # 채팅방별/사용자별 카운트
-    room_counts: dict[str, int] = {}
-    user_counts: dict[str, int] = {}
-    for item in items:
-        room_counts[item["room"]] = room_counts.get(item["room"], 0) + 1
-        user_counts[item["user"]] = user_counts.get(item["user"], 0) + 1
+    # 집계용: 대표 샘플 + 통계 정보 추가
+    stats_item = _build_aggregate_stats_item(items, analysis)
 
-    # 통계 요약을 첫 번째 항목으로 추가
-    stats_text = f"[통계 요약] 총 {total_count}건"
-    if room_counts:
-        top_rooms = sorted(room_counts.items(), key=lambda x: -x[1])[:10]
-        stats_text += f"\n채팅방별: {', '.join(f'{r}({c}건)' for r, c in top_rooms)}"
-    if user_counts:
-        top_users = sorted(user_counts.items(), key=lambda x: -x[1])[:10]
-        stats_text += f"\n사용자별: {', '.join(f'{u}({c}건)' for u, c in top_users)}"
+    # 균일 샘플링 (시간순 분포 유지)
+    sample_size = min(top_k - 1, total_count)
+    if sample_size > 0 and total_count > sample_size:
+        if _wants_assignee_roster(analysis):
+            sampled = _sample_unique_by_key(items, "assignee", sample_size)
+        else:
+            step = total_count // sample_size
+            sampled = [items[i * step] for i in range(sample_size)]
+    else:
+        sampled = items[:sample_size]
 
-    stats_item = {
+    return [stats_item] + sampled
+
+
+def _build_aggregate_stats_item(items: list[dict], analysis: QueryAnalysis) -> dict:
+    """집계 결과를 LLM 친화적인 요약 청크로 변환"""
+    total_count = len(items)
+    room_counts = Counter(item["room"] for item in items if item.get("room"))
+    user_counts = Counter(item["user"] for item in items if item.get("user"))
+    assignee_counts = Counter(item["assignee"] for item in items if item.get("assignee"))
+    status_counts = Counter(item["status"] for item in items if item.get("status"))
+
+    stats_lines = [f"[통계 요약] 총 {total_count}건"]
+
+    if assignee_counts and _should_prefer_assignee_summary(analysis, user_counts):
+        all_assignees = ", ".join(sorted(assignee_counts))
+        assignee_rank = ", ".join(
+            f"{name}({count}건)"
+            for name, count in sorted(assignee_counts.items(), key=lambda item: (-item[1], item[0]))
+        )
+        stats_lines.append(f"담당자 전체({len(assignee_counts)}명): {all_assignees}")
+        stats_lines.append(f"담당자별 건수: {assignee_rank}")
+        if status_counts:
+            status_rank = ", ".join(
+                f"{status}({count}건)"
+                for status, count in sorted(status_counts.items(), key=lambda item: (-item[1], item[0]))
+            )
+            stats_lines.append(f"상태별: {status_rank}")
+    else:
+        if room_counts:
+            top_rooms = sorted(room_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+            stats_lines.append(f"채팅방별: {', '.join(f'{room}({count}건)' for room, count in top_rooms)}")
+        if user_counts:
+            top_users = sorted(user_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+            stats_lines.append(f"사용자별: {', '.join(f'{user}({count}건)' for user, count in top_users)}")
+
+    return {
         "id": "stats_summary",
         "document_id": "",
-        "content": stats_text,
+        "content": "\n".join(stats_lines),
         "chunk_index": 0,
         "score": 1.0,
         "room": "통계",
@@ -202,15 +241,42 @@ async def _search_aggregate(analysis: QueryAnalysis, top_k: int) -> list[dict]:
         "time": "",
     }
 
-    # 균일 샘플링 (시간순 분포 유지)
-    sample_size = min(top_k - 1, total_count)
-    if sample_size > 0 and total_count > sample_size:
-        step = total_count // sample_size
-        sampled = [items[i * step] for i in range(sample_size)]
-    else:
-        sampled = items[:sample_size]
 
-    return [stats_item] + sampled
+def _should_prefer_assignee_summary(analysis: QueryAnalysis, user_counts: Counter[str]) -> bool:
+    """이슈 데이터처럼 담당자 기준 요약이 더 적합한지 판단"""
+    if not analysis.original_query:
+        return not user_counts
+
+    text = f"{analysis.original_query} {analysis.search_text}".strip()
+    assignee_keywords = ("담당자", "팀", "팀원", "구성원", "멤버", "참여자")
+    return any(keyword in text for keyword in assignee_keywords) or not user_counts
+
+
+def _wants_assignee_roster(analysis: QueryAnalysis) -> bool:
+    """전수 담당자/팀원 목록 질문인지 판단"""
+    text = f"{analysis.original_query} {analysis.search_text}".strip()
+    target_keywords = ("담당자", "팀", "팀원", "구성원", "멤버", "참여자")
+    list_keywords = ("모두", "전체", "전원", "목록", "리스트", "누구", "이름")
+    return (
+        analysis.intent == "list"
+        and any(keyword in text for keyword in target_keywords)
+        and any(keyword in text for keyword in list_keywords)
+    )
+
+
+def _sample_unique_by_key(items: list[dict], key: str, limit: int) -> list[dict]:
+    """동일 담당자 샘플이 반복되지 않도록 대표 항목만 추출"""
+    sampled = []
+    seen = set()
+    for item in items:
+        value = item.get(key)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        sampled.append(item)
+        if len(sampled) >= limit:
+            break
+    return sampled
 
 
 def _format_results(results: dict, top_k: int) -> list[dict]:
@@ -232,6 +298,9 @@ def _format_results(results: dict, top_k: int) -> list[dict]:
             "score": round(1 - distance, 4),
             "room": room,
             "user": meta.get("user", ""),
+            "assignee": meta.get("assignee", ""),
+            "status": meta.get("status", ""),
+            "doc_type": meta.get("doc_type", ""),
             "date": meta.get("date", ""),
             "time": meta.get("time", ""),
         }

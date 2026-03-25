@@ -12,7 +12,7 @@ Simple RAG Chat은 정형 채팅 로그를 검색 가능한 임베딩 단위로 
 
 - 채팅 로그 1줄을 1개의 검색 단위로 유지
 - 날짜, 채팅방, 사용자 필터를 빠르게 적용
-- 답변 생성기는 Ollama 또는 프록시 LLM으로 교체 가능
+- 답변 생성기는 Ollama 또는 프록시/직접 호출 기반 LLM으로 교체 가능
 
 ## 2. 현재 아키텍처
 
@@ -27,7 +27,7 @@ Simple RAG Chat은 정형 채팅 로그를 검색 가능한 임베딩 단위로 
   -> query_analyzer
   -> retrieval
   -> vector_store(chroma)
-  -> LLM(ollama | claude proxy | codex proxy)
+  -> LLM(ollama | claude proxy | codex gateway(proxy|direct))
 ```
 
 ### 주요 구성 요소
@@ -50,7 +50,9 @@ Simple RAG Chat은 정형 채팅 로그를 검색 가능한 임베딩 단위로 
 - `app/services/llm.py`
   - `OllamaLLM`
   - `ProxyLLM`
-  - 프록시 상태 확인, 재시도, 스트리밍 오류 처리
+  - `CodexDirectLLM`
+  - `GatewayLLM`
+  - 프록시/direct 상태 확인, 재시도, 스트리밍 오류 처리
 - `app/database.py`
   - ChromaDB 핸들
   - `documents.json` 메타데이터 저장
@@ -136,6 +138,22 @@ Simple RAG Chat은 정형 채팅 로그를 검색 가능한 임베딩 단위로 
 - 인증: `Authorization: Bearer <PROXY_API_KEY>`
 - 상태 확인: `/v1/models`
 
+### Codex 게이트웨이 모드
+
+- provider: `codex`
+- transport:
+  - `proxy`: 기존 OpenAI 호환 프록시 경로
+  - `direct`: `chatgpt.com/backend-api/codex/responses`
+- 라우팅 모드:
+  - `stable`
+  - `fastest`
+  - `proxy_only`
+  - `direct_only`
+- direct 인증:
+  - 기본 `~/.codex/auth.json`
+  - fallback `~/.chatgpt-codex-proxy/tokens.json`
+  - access token 만료 임박 시 refresh token으로 갱신
+
 ### 프록시 안정성 처리
 
 - 동시 요청 직렬화
@@ -157,7 +175,7 @@ Simple RAG Chat은 정형 채팅 로그를 검색 가능한 임베딩 단위로 
 | `POST` | `/query` | 일반 질의 |
 | `POST` | `/query/stream` | SSE 스트리밍 질의 |
 | `GET` | `/health` | 서버 상태 |
-| `GET` | `/health/llm` | provider/model 상태 |
+| `GET` | `/health/llm` | provider/model/라우팅/transport 상태 |
 
 ## 7. 환경 변수
 
@@ -171,6 +189,14 @@ Simple RAG Chat은 정형 채팅 로그를 검색 가능한 임베딩 단위로 
 | `PROXY_API_KEY` | 빈 값 | 프록시 토큰 |
 | `CLAUDE_MODEL` | `claude-sonnet-latest` | Claude 모델명 |
 | `CODEX_MODEL` | `gpt-5-codex` | Codex 모델명 |
+| `LLM_ROUTING_MODE` | `stable` | `stable`, `fastest`, `proxy_only`, `direct_only` |
+| `CODEX_PROXY_ENABLED` | `true` | Codex 프록시 transport 사용 |
+| `CODEX_DIRECT_ENABLED` | `true` | Codex direct transport 사용 |
+| `CODEX_DIRECT_BASE_URL` | `https://chatgpt.com/backend-api` | direct backend 주소 |
+| `CODEX_AUTH_PATH` | `~/.codex/auth.json` | Codex auth 파일 |
+| `CODEX_FALLBACK_AUTH_PATH` | `~/.chatgpt-codex-proxy/tokens.json` | fallback auth 파일 |
+| `LLM_WARMUP_ON_STARTUP` | `false` | startup warmup 수행 |
+| `LLM_SELFTEST_ON_STARTUP` | `false` | startup self-test/warmup 수행 |
 | `VECTOR_DB_TYPE` | `chroma` | 벡터 저장소 |
 | `CHROMA_PERSIST_DIR` | `./chroma_db` | Chroma 저장 경로 |
 | `TOP_K` | `5` | 기본 검색 결과 수 |
@@ -183,6 +209,7 @@ Simple RAG Chat은 정형 채팅 로그를 검색 가능한 임베딩 단위로 
 - `tests/test_query_analyzer.py`
 - `tests/test_documents.py`
 - `tests/test_llm_proxy.py`
+- `tests/test_llm_gateway.py`
 
 검증하는 항목:
 
@@ -192,9 +219,12 @@ Simple RAG Chat은 정형 채팅 로그를 검색 가능한 임베딩 단위로 
 - 상대 날짜 계산
 - 문서 삭제 API 계약
 - 프록시 인증 헤더/재시도/직렬화/에러 처리
+- Codex auth 파싱/refresh 경로
+- gateway fallback과 `fastest` 라우팅
 
 ## 9. 운영 메모
 
 - UI는 `/health/llm` 결과로 실제 provider 상태를 표시한다.
 - 프록시 모드여도 임베딩은 Ollama에 의존한다.
+- `fastest` 모드는 warmup 샘플이 없으면 초기에 `stable` 순서로 동작할 수 있다.
 - 포트 `8000` 충돌 시 `8001`로 실행해도 무방하다.
