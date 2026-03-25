@@ -154,39 +154,51 @@ class ExcelIssueParser(BaseParser):
         return "\n".join(parts)
 
     def _split_row(self, row: dict, full_text: str, metadata: dict, doc_id: str) -> list[dict]:
-        """2차 분할: 이슈 요약 + 문제 원인 분석 (KSS 적용)
+        """2차 분할: 이슈 요약 + 행동 흐름 기반 분석 chunk
 
-        스킬 원칙: "문제 원인 분석 결과는 가능하면 단일 chunk 유지"
-        → KSS로 분할하되 짧은 문장은 다시 합침
+        하이브리드 전략:
+          1단계: KSS 문장 분리
+          2단계: 규칙 기반 라벨링 (discovery/attempt/fix/result 등)
+          3단계: 인접 라벨 묶기 (행동 흐름 chunk)
         """
+        from app.services.parsers.labeler import build_flow_chunks, split_and_label
+
+        title = _safe_str(row.get("title"))
+
         # Chunk 1: 이슈 요약
-        summary_parts = []
-        summary_parts.append(f"[이슈] {_safe_str(row.get('title'))}")
-        summary_parts.append(f"[등록일] {_format_date(row.get('created_at'))}")
-        summary_parts.append(f"[기본 확인내용] {_safe_str(row.get('basic_check'))}")
-        summary_parts.append(f"[기본 작업내용] {_safe_str(row.get('basic_work'))}")
-        summary_parts.append(f"[업무지시] {_safe_str(row.get('instruction'))}")
-        summary_parts.append(f"[담당자] {_safe_str(row.get('assignee'))}")
+        summary_parts = [
+            f"[이슈] {title}",
+            f"[등록일] {_format_date(row.get('created_at'))}",
+            f"[기본 확인내용] {_safe_str(row.get('basic_check'))}",
+            f"[기본 작업내용] {_safe_str(row.get('basic_work'))}",
+            f"[업무지시] {_safe_str(row.get('instruction'))}",
+            f"[담당자] {_safe_str(row.get('assignee'))}",
+        ]
         summary_text = "\n".join(summary_parts)
 
         chunks = [{
             "embedding_text": summary_text,
             "original": full_text,
-            "metadata": {**metadata, "split_index": 0},
+            "metadata": {**metadata, "split_index": 0, "flow_name": "이슈 요약"},
         }]
 
-        # Chunk 2+: 문제 원인 분석 (KSS 분할)
+        # Chunk 2+: 문제 원인 분석 (행동 흐름 기반)
         analysis = _safe_str(row.get("analysis"))
         if analysis:
-            from app.services.parsers.chat_log_parser import _split_long_content
-            analysis_parts = _split_long_content(analysis)
+            labeled = split_and_label(analysis)
+            flow_chunks = build_flow_chunks(labeled)
 
-            for i, part in enumerate(analysis_parts):
-                analysis_text = f"[이슈] {_safe_str(row.get('title'))}\n[문제 원인 분석 결과] {part}"
+            for i, fc in enumerate(flow_chunks):
+                analysis_text = f"[이슈] {title}\n[{fc['flow_name']}] {fc['text']}"
                 chunks.append({
                     "embedding_text": analysis_text,
                     "original": full_text,
-                    "metadata": {**metadata, "split_index": i + 1},
+                    "metadata": {
+                        **metadata,
+                        "split_index": i + 1,
+                        "flow_name": fc["flow_name"],
+                        "labels": ",".join(fc["labels"]),
+                    },
                 })
 
         return chunks
