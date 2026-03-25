@@ -79,6 +79,18 @@ class QueryAnalysis:
         self.strategy = raw.get("strategy", "hybrid")
 
     @property
+    def assignee(self) -> str | None:
+        return self._clean(self.filters.get("assignee"))
+
+    @property
+    def status(self) -> str | None:
+        return self._clean(self.filters.get("status"))
+
+    @property
+    def doc_type(self) -> str | None:
+        return self._clean(self.filters.get("doc_type"))
+
+    @property
     def room(self) -> str | None:
         return self._clean(self.filters.get("room"))
 
@@ -119,6 +131,12 @@ class QueryAnalysis:
         """
         conditions = []
 
+        if self.assignee:
+            conditions.append({"assignee": self.assignee})
+        if self.status:
+            conditions.append({"status": self.status})
+        if self.doc_type:
+            conditions.append({"doc_type": self.doc_type})
         if self.room:
             conditions.append({"room": self.room})
         if self.user:
@@ -153,7 +171,10 @@ class QueryAnalysis:
             date=self.date,
             date_from=self.date_from,
             date_to=self.date_to,
-            document_id=None,  # QueryAnalysis에서는 미지원
+            assignee=self.assignee,
+            status=self.status,
+            doc_type=self.doc_type,
+            document_id=None,
         )
 
     def __repr__(self):
@@ -173,9 +194,10 @@ _reference_date_cache: date | None = None
 
 def invalidate_query_analyzer_cache() -> None:
     """쿼리 분석용 메타데이터 캐시 초기화"""
-    global _room_cache, _user_cache, _reference_date_cache
+    global _room_cache, _user_cache, _reference_date_cache, _assignee_cache
     _room_cache = None
     _user_cache = None
+    _assignee_cache = None
     _reference_date_cache = None
 
 
@@ -188,6 +210,22 @@ def _get_known_metadata_values(field: str) -> list[str]:
         if value:
             values.add(str(value).strip())
     return sorted(values, key=len, reverse=True)
+
+
+_assignee_cache: list[str] | None = None
+
+
+def _get_known_assignees() -> list[str]:
+    """ChromaDB에서 실제 담당자 목록을 동적으로 추출 (캐시)"""
+    global _assignee_cache
+    if _assignee_cache is not None:
+        return _assignee_cache
+
+    try:
+        _assignee_cache = _get_known_metadata_values("assignee")
+        return _assignee_cache
+    except Exception:
+        return []
 
 
 def _get_known_rooms() -> list[str]:
@@ -336,7 +374,32 @@ async def analyze_query(query: str) -> QueryAnalysis:
         filters["date"] = (reference_today - timedelta(days=1)).strftime("%Y-%m-%d")
         clean_query = clean_query.replace("어제", "")
 
-    # --- 2. 채팅방 매칭 ---
+    # --- 2. 담당자 매칭 (이슈 데이터) ---
+    known_assignees = _get_known_assignees()
+    for assignee in known_assignees:
+        assignee_pattern = re.compile(
+            rf"(?<![가-힣]){re.escape(assignee)}(?:님|씨|이|가|은|는|을|를|의)?(?:\s*담당)?(?=\s|$)"
+        )
+        match = assignee_pattern.search(query)
+        if match:
+            filters["assignee"] = assignee
+            clean_query = clean_query.replace(match.group(0), "")
+            break
+
+    # --- 2-1. 상태 감지 (이슈 데이터) ---
+    _STATUS_MAP = {
+        "완료": "완료", "완료된": "완료", "끝난": "완료",
+        "진행": "진행", "진행중": "진행", "진행 중": "진행",
+        "대기": "대기", "대기중": "대기",
+        "미완료": "미완료",
+    }
+    for keyword, status_val in _STATUS_MAP.items():
+        if keyword in query:
+            filters["status"] = status_val
+            clean_query = clean_query.replace(keyword, "")
+            break
+
+    # --- 3. 채팅방 매칭 ---
     known_rooms = _get_known_rooms()
     for room in known_rooms:
         if room in query:

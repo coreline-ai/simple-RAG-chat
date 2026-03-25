@@ -11,7 +11,7 @@ from typing import Any
 class VectorStoreFilter:
     """벡터 DB 공통 필터 형식
 
-    채팅 로그 검색용 메타데이터 필터를 표현한다.
+    채팅 로그 + 이슈 데이터 검색용 메타데이터 필터를 표현한다.
     """
 
     def __init__(
@@ -22,12 +22,18 @@ class VectorStoreFilter:
         date_from: str | None = None,
         date_to: str | None = None,
         document_id: str | None = None,
+        assignee: str | None = None,
+        status: str | None = None,
+        doc_type: str | None = None,
     ):
         self.room = room
         self.user = user
         self.date = date
         self.date_from = date_from
         self.date_to = date_to
+        self.assignee = assignee
+        self.status = status
+        self.doc_type = doc_type
         self.document_id = document_id
 
     def __repr__(self) -> str:

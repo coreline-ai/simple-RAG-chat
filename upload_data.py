@@ -1,31 +1,56 @@
-"""1만건 채팅 로그를 라인 단위로 임베딩하여 업로드"""
+"""데이터 파일을 임베딩하여 ChromaDB에 업로드
+
+지원 형식:
+  - .txt: 채팅 로그
+  - .xlsx: 이슈 데이터 (엑셀)
+
+사용법:
+  python upload_data.py                                  # 기본: 엑셀 이슈 데이터
+  python upload_data.py data/model_issue_dataset_10000.xlsx
+  python upload_data.py data/chat_logs.txt               # 채팅 로그
+"""
 import asyncio
+import os
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
 
 from app.database import add_document, chunks_collection
-from app.services.chunking import parse_and_format
 from app.services.embedding import get_embeddings
+from app.services.parsers import ParserFactory
 
 
-async def upload_chat_logs():
+async def upload_file(filepath: str):
+    """범용 파일 업로드 — 파서 팩토리 기반"""
     start = time.time()
+    filename = os.path.basename(filepath)
 
-    with open("data/chat_logs.txt", "r", encoding="utf-8") as f:
-        content = f.read()
+    print(f"파일: {filepath}")
+    print(f"파서: {ParserFactory.create(filename).__class__.__name__}")
 
-    # 전략에 따른 파싱 (config.chunking_strategy 기반)
-    from app.config import settings
-    parsed_lines = parse_and_format(content)
-    print(f"파싱된 청크: {len(parsed_lines)}건 (전략: {settings.chunking_strategy})")
+    # 파서 선택 + 파싱
+    parser = ParserFactory.create(filename)
+
+    if filename.endswith((".xlsx", ".xls")):
+        parsed_chunks = parser.parse(filepath)
+    else:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+        parsed_chunks = parser.parse(content)
+
+    print(f"파싱된 청크: {len(parsed_chunks)}건")
+
+    if not parsed_chunks:
+        print("파싱 가능한 데이터가 없습니다")
+        return
 
     doc_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
 
     add_document(doc_id, {
-        "filename": "chat_logs.txt",
-        "total_chunks": len(parsed_lines),
+        "filename": filename,
+        "total_chunks": len(parsed_chunks),
         "created_at": created_at,
     })
 
@@ -33,24 +58,20 @@ async def upload_chat_logs():
     batch_size = 50
     total_stored = 0
 
-    for i in range(0, len(parsed_lines), batch_size):
-        batch = parsed_lines[i : i + batch_size]
+    for i in range(0, len(parsed_chunks), batch_size):
+        batch = parsed_chunks[i : i + batch_size]
 
         texts = [item["embedding_text"] for item in batch]
         embeddings = await get_embeddings(texts)
 
-        chunk_ids = [f"{doc_id}_line_{i + j}" for j in range(len(batch))]
+        chunk_ids = [f"{doc_id}_chunk_{i + j}" for j in range(len(batch))]
         documents = [item["embedding_text"] for item in batch]
         metadatas = [
             {
                 "document_id": doc_id,
                 "chunk_index": i + j,
-                "filename": "chat_logs.txt",
-                "room": item["metadata"]["room"],
-                "user": item["metadata"]["user"],
-                "date": item["metadata"]["date"],
-                "date_int": item["metadata"]["date_int"],
-                "time": item["metadata"]["time"],
+                "filename": filename,
+                **item["metadata"],
                 "original": item["original"],
             }
             for j, item in enumerate(batch)
@@ -65,12 +86,13 @@ async def upload_chat_logs():
 
         total_stored += len(batch)
         elapsed = time.time() - start
-        pct = total_stored / len(parsed_lines) * 100
-        print(f"  [{total_stored}/{len(parsed_lines)}] {pct:.0f}% ({elapsed:.0f}초)")
+        pct = total_stored / len(parsed_chunks) * 100
+        print(f"  [{total_stored}/{len(parsed_chunks)}] {pct:.0f}% ({elapsed:.0f}초)")
 
     elapsed = time.time() - start
     print(f"\n완료! {total_stored}건 저장, 소요: {elapsed:.0f}초")
 
 
 if __name__ == "__main__":
-    asyncio.run(upload_chat_logs())
+    filepath = sys.argv[1] if len(sys.argv) > 1 else "data/model_issue_dataset_10000.xlsx"
+    asyncio.run(upload_file(filepath))
