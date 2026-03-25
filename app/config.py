@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     embedding_cache_enabled: bool = True
 
     # 엑셀 이슈 데이터 설정
-    excel_row_max_chars: int = 900  # 이 길이 초과 시 2차 KSS 분할
+    excel_row_max_chars: int = 600  # 이 길이 초과 시 2차 KSS 분할
     excel_sheet_name: str = ""      # 빈 값이면 첫 번째 시트
     excel_id_prefix: str = "issue"  # doc_id 접두사
 
