@@ -99,6 +99,25 @@ pytest -q --run-performance
 - `tests/conftest.py`는 테스트마다 semaphore/lock을 리셋해 이벤트 루프 오염을 막는다
 - `isolated_db` fixture는 임시 Chroma 경로와 관련 모듈을 통째로 분리한다
 
+## 주요 설정값
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `LLM_PROVIDER` | `ollama` | `ollama` / `claude` / `codex` |
+| `LLM_MODEL` | `qwen2.5-coder:7b` | Ollama 모드 답변 모델 |
+| `EMBEDDING_MODEL` | `bge-m3` | Ollama 임베딩 모델 |
+| `EMBEDDING_MAX_CONCURRENCY` | `3` | Ollama 동시 임베딩 요청 제한 |
+| `EMBEDDING_CACHE_ENABLED` | `true` | SQLite 임베딩 캐시 활성화 |
+| `TOP_K` | `5` | 기본 검색 결과 수 |
+| `SEARCH_VECTOR_MULTIPLIER` | `3` | vector 검색 시 top_k 배수 |
+| `SEARCH_HYBRID_MULTIPLIER` | `4` | hybrid 검색 시 top_k 배수 |
+| `SEARCH_METADATA_MULTIPLIER` | `5` | metadata 검색 시 top_k 배수 |
+| `QUERY_CACHE_TTL_SECONDS` | `300` | 쿼리 결과 캐시 TTL (0이면 비활성) |
+| `CHUNKING_STRATEGY` | `line` | `line` / `session` / `kss` |
+| `EXCEL_ROW_MAX_CHARS` | `600` | 엑셀 2차 KSS 분할 임계값 |
+| `USE_KIWI_KEYWORDS` | `true` | kiwipiepy 형태소 분석 사용 |
+| `LLM_ROUTING_MODE` | `stable` | Codex 라우팅: `stable` / `fastest` / `proxy_only` / `direct_only` |
+
 ## 운영 메모
 
 - 프록시 모드여도 임베딩은 Ollama에 의존한다

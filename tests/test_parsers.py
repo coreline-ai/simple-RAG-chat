@@ -72,15 +72,10 @@ class TestChatLogParser:
 
     # === _parse_lines 테스트 ===
 
-    def test_parse_lines_단일_라인을_파싱한다(self, monkeypatch):
+    def test_parse_lines_단일_라인을_파싱한다(self):
         """단일 라인 파싱"""
-        monkeypatch.setattr("app.services.parsers.chat_log_parser.settings", type("Settings", (), {
-            "chunking_strategy": "line",
-        })())
-
         parser = ChatLogParser()
-        text = CHAT_LOG_SAMPLE
-        results = parser.parse(text)
+        results = parser.parse(CHAT_LOG_SAMPLE, strategy="line")
 
         assert len(results) == 1
         assert results[0]["embedding_text"] == "개발팀 김민수: 안녕하세요"
@@ -90,53 +85,33 @@ class TestChatLogParser:
         assert results[0]["metadata"]["date"] == "2024-01-15"
         assert results[0]["metadata"]["date_int"] == 20240115
 
-    def test_parse_lines_여러_라인을_파싱한다(self, monkeypatch):
+    def test_parse_lines_여러_라인을_파싱한다(self):
         """여러 라인 파싱"""
-        monkeypatch.setattr("app.services.parsers.chat_log_parser.settings", type("Settings", (), {
-            "chunking_strategy": "line",
-        })())
-
         parser = ChatLogParser()
-        text = f"{CHAT_LOG_SAMPLE}\n{CHAT_LOG_WITH_COMMA}"
-        results = parser.parse(text)
+        results = parser.parse(f"{CHAT_LOG_SAMPLE}\n{CHAT_LOG_WITH_COMMA}", strategy="line")
 
         assert len(results) == 2
-        # embedding_text 확인
         assert "안녕하세요" in results[0]["embedding_text"]
         assert "배포가 완료되었습니다, 확인 부탁드립니다" in results[1]["embedding_text"]
 
-    def test_parse_lines_빈_라인은_무시한다(self, monkeypatch):
+    def test_parse_lines_빈_라인은_무시한다(self):
         """빈 라인은 무시"""
-        monkeypatch.setattr("app.services.parsers.chat_log_parser.settings", type("Settings", (), {
-            "chunking_strategy": "line",
-        })())
-
         parser = ChatLogParser()
-        text = f"{CHAT_LOG_SAMPLE}\n\n\n{CHAT_LOG_WITH_COMMA}"
-        results = parser.parse(text)
+        results = parser.parse(f"{CHAT_LOG_SAMPLE}\n\n\n{CHAT_LOG_WITH_COMMA}", strategy="line")
 
         assert len(results) == 2
 
-    def test_parse_lines_잘못된_형식은_무시한다(self, monkeypatch):
+    def test_parse_lines_잘못된_형식은_무시한다(self):
         """잘못된 형식의 라인은 무시"""
-        monkeypatch.setattr("app.services.parsers.chat_log_parser.settings", type("Settings", (), {
-            "chunking_strategy": "line",
-        })())
-
         parser = ChatLogParser()
-        text = f"{CHAT_LOG_SAMPLE}\n{CHAT_LOG_INVALID}\n{CHAT_LOG_WITH_COMMA}"
-        results = parser.parse(text)
+        results = parser.parse(f"{CHAT_LOG_SAMPLE}\n{CHAT_LOG_INVALID}\n{CHAT_LOG_WITH_COMMA}", strategy="line")
 
         assert len(results) == 2
 
-    def test_parse_lines_date_int를_생성한다(self, monkeypatch):
+    def test_parse_lines_date_int를_생성한다(self):
         """date_int 메타데이터 생성 확인"""
-        monkeypatch.setattr("app.services.parsers.chat_log_parser.settings", type("Settings", (), {
-            "chunking_strategy": "line",
-        })())
-
         parser = ChatLogParser()
-        results = parser.parse(CHAT_LOG_SAMPLE)
+        results = parser.parse(CHAT_LOG_SAMPLE, strategy="line")
 
         assert results[0]["metadata"]["date_int"] == 20240115
 
@@ -334,14 +309,10 @@ class TestExcelIssueParser:
 
     # === _build_metadata 테스트 ===
 
-    def test_build_metadata_모든_날짜_형식을_생성한다(self, monkeypatch):
+    def test_build_metadata_모든_날짜_형식을_생성한다(self):
         """날짜 3형식 (iso/int/하위호환) 생성 확인"""
         from datetime import datetime
         from app.services.parsers.excel_issue_parser import ExcelIssueParser
-
-        monkeypatch.setattr("app.services.parsers.excel_issue_parser.settings", type("Settings", (), {
-            "excel_id_prefix": "issue",
-        })())
 
         parser = ExcelIssueParser()
         row = {
@@ -373,13 +344,9 @@ class TestExcelIssueParser:
 
     # === _extract_row 테스트 ===
 
-    def test_extract_row_title이_없으면_None을_반환한다(self, monkeypatch):
+    def test_extract_row_title이_없으면_None을_반환한다(self):
         """title이 없으면 None 반환"""
         from app.services.parsers.excel_issue_parser import ExcelIssueParser
-
-        monkeypatch.setattr("app.services.parsers.excel_issue_parser.settings", type("Settings", (), {
-            "excel_id_prefix": "issue",
-        })())
 
         parser = ExcelIssueParser()
         row = ("", "2024-03-15", "확인 내용")  # title이 비어있음
@@ -388,13 +355,9 @@ class TestExcelIssueParser:
         result = parser._extract_row(row, col_indices)
         assert result is None
 
-    def test_extract_row_유효한_행을_추출한다(self, monkeypatch):
+    def test_extract_row_유효한_행을_추출한다(self):
         """유효한 행 추출"""
         from app.services.parsers.excel_issue_parser import ExcelIssueParser
-
-        monkeypatch.setattr("app.services.parsers.excel_issue_parser.settings", type("Settings", (), {
-            "excel_id_prefix": "issue",
-        })())
 
         parser = ExcelIssueParser()
         row = ("GPU 메모리 부족", "2024-03-15", "확인 내용", "작업 내용", "지시", "Sujin")
@@ -416,13 +379,9 @@ class TestExcelIssueParser:
 
     # === _build_embedding_text 테스트 ===
 
-    def test_build_embedding_text_구조화된_텍스트를_생성한다(self, monkeypatch):
+    def test_build_embedding_text_구조화된_텍스트를_생성한다(self):
         """임베딩 텍스트 조합 확인"""
         from app.services.parsers.excel_issue_parser import ExcelIssueParser
-
-        monkeypatch.setattr("app.services.parsers.excel_issue_parser.settings", type("Settings", (), {
-            "excel_id_prefix": "issue",
-        })())
 
         parser = ExcelIssueParser()
         row = {
@@ -447,13 +406,9 @@ class TestExcelIssueParser:
         assert "[담당자] Sujin" in result
         assert "[진행] 50%" in result
 
-    def test_build_embedding_text_완료일과_분석을_포함한다(self, monkeypatch):
+    def test_build_embedding_text_완료일과_분석을_포함한다(self):
         """완료일과 분석 내용 포함"""
         from app.services.parsers.excel_issue_parser import ExcelIssueParser
-
-        monkeypatch.setattr("app.services.parsers.excel_issue_parser.settings", type("Settings", (), {
-            "excel_id_prefix": "issue",
-        })())
 
         parser = ExcelIssueParser()
         row = {
@@ -475,14 +430,9 @@ class TestExcelIssueParser:
 
     # === _build_chunks 테스트 ===
 
-    def test_build_chunks_1row는_1chunk이다(self, monkeypatch):
+    def test_build_chunks_1row는_1chunk이다(self):
         """기본: 1 row = 1 chunk"""
         from app.services.parsers.excel_issue_parser import ExcelIssueParser
-
-        monkeypatch.setattr("app.services.parsers.excel_issue_parser.settings", type("Settings", (), {
-            "excel_id_prefix": "issue",
-            "excel_row_max_chars": 1000,
-        })())
 
         parser = ExcelIssueParser()
         row = {
