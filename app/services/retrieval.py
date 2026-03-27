@@ -14,12 +14,39 @@ LLM 쿼리 분석기를 통해 질의 의도를 파악하고,
 """
 from __future__ import annotations
 
+import logging
+import time
 from collections import Counter
 
 from app.config import settings
 from app.database import chunks_collection
 from app.services.embedding import get_embedding
 from app.services.query_analyzer import QueryAnalysis, analyze_query
+
+logger = logging.getLogger(__name__)
+
+# 쿼리 결과 인메모리 캐시 {(query, top_k): (timestamp, results, analysis)}
+_query_cache: dict[tuple[str, int], tuple[float, list[dict], QueryAnalysis]] = {}
+_QUERY_CACHE_MAX_SIZE = 256
+
+
+def invalidate_query_cache() -> None:
+    """쿼리 결과 캐시 전체 무효화 (문서 변경 시 호출)"""
+    _query_cache.clear()
+
+
+def _evict_expired_cache(ttl: float) -> None:
+    """만료된 캐시 항목 제거 + 크기 제한 초과 시 가장 오래된 항목 제거"""
+    now = time.monotonic()
+    expired = [k for k, (ts, _, _) in _query_cache.items() if (now - ts) >= ttl]
+    for k in expired:
+        del _query_cache[k]
+
+    # 크기 제한 초과 시 가장 오래된 항목부터 제거
+    if len(_query_cache) > _QUERY_CACHE_MAX_SIZE:
+        sorted_keys = sorted(_query_cache, key=lambda k: _query_cache[k][0])
+        for k in sorted_keys[: len(_query_cache) - _QUERY_CACHE_MAX_SIZE]:
+            del _query_cache[k]
 
 
 async def search_similar_chunks(
@@ -33,13 +60,22 @@ async def search_similar_chunks(
     """
     top_k = top_k or settings.top_k
 
+    # TTL 캐시 확인
+    ttl = settings.query_cache_ttl_seconds
+    if ttl > 0:
+        cache_key = (query, top_k)
+        cached = _query_cache.get(cache_key)
+        if cached and (time.monotonic() - cached[0]) < ttl:
+            logger.debug("[캐시 히트] query=%s", query[:50])
+            return cached[1], cached[2]
+
     if chunks_collection.count() == 0:
         empty_analysis = QueryAnalysis({"intent": "search", "strategy": "vector"})
         return [], empty_analysis
 
-    # 1단계: LLM 쿼리 분석
+    # 1단계: 규칙 기반 쿼리 분석
     analysis = await analyze_query(query)
-    print(f"[검색전략] strategy={analysis.strategy}, intent={analysis.intent}")
+    logger.debug("[검색전략] strategy=%s, intent=%s", analysis.strategy, analysis.intent)
 
     # 2단계: 전략에 따른 검색 실행
     if analysis.strategy == "aggregate":
@@ -51,6 +87,12 @@ async def search_similar_chunks(
     else:  # vector
         results = await _search_vector(query, top_k)
 
+    # 결과 캐싱 (쓰기 시 만료/크기 정리)
+    if ttl > 0:
+        _evict_expired_cache(ttl)
+        _query_cache[(query, top_k)] = (time.monotonic(), results, analysis)
+        _evict_expired_cache(ttl)
+
     return results, analysis
 
 
@@ -58,7 +100,7 @@ async def _search_vector(query: str, top_k: int) -> list[dict]:
     """순수 벡터 유사도 검색 (내용 기반)"""
     query_embedding = await get_embedding(query)
 
-    search_k = min(top_k * 3, chunks_collection.count())
+    search_k = min(top_k * settings.search_vector_multiplier, chunks_collection.count())
     results = chunks_collection.query(
         query_embeddings=[query_embedding],
         n_results=search_k,
@@ -79,7 +121,7 @@ async def _search_metadata(analysis: QueryAnalysis, top_k: int) -> list[dict]:
     filtered = chunks_collection.get(
         where=where,
         include=["documents", "metadatas"],
-        limit=top_k * 5,  # 여유 있게 가져옴
+        limit=top_k * settings.search_metadata_multiplier,
     )
 
     if not filtered["ids"]:
@@ -117,7 +159,7 @@ async def _search_hybrid(analysis: QueryAnalysis, query: str, top_k: int) -> lis
         filtered = chunks_collection.get(where=where, include=["metadatas"])
         filtered_count = len(filtered["ids"])
         if filtered_count == 0:
-            print(f"[하이브리드] 필터 결과 0건, 벡터 검색으로 폴백")
+            logger.debug("[하이브리드] 필터 결과 0건, 벡터 검색으로 폴백")
             where = None
     else:
         filtered_count = chunks_collection.count()
@@ -126,7 +168,7 @@ async def _search_hybrid(analysis: QueryAnalysis, query: str, top_k: int) -> lis
     search_text = analysis.search_text or query
     query_embedding = await get_embedding(search_text)
 
-    search_k = min(top_k * 4, filtered_count if where else chunks_collection.count())
+    search_k = min(top_k * settings.search_hybrid_multiplier, filtered_count if where else chunks_collection.count())
     if search_k == 0:
         search_k = top_k
 

@@ -10,34 +10,20 @@ from app.config import settings
 # 핵심 함수 재수출 (기존 import 호환)
 from app.services.parsers.chat_log_parser import (
     ChatLogParser,
-    _parse_time,
-    _split_long_content,
     parse_chat_line,
 )
-from app.services.parsers.factory import ParserFactory
 
 
 def parse_and_format_lines(text: str) -> list[dict]:
     """채팅 로그를 라인 단위로 파싱 (하위 호환 래퍼)"""
     parser = ChatLogParser()
-    # 강제 line 전략
-    original = settings.chunking_strategy
-    try:
-        settings.chunking_strategy = "line"
-        return parser.parse(text)
-    finally:
-        settings.chunking_strategy = original
+    return parser.parse(text, strategy="line")
 
 
 def parse_and_format_sessions(text: str) -> list[dict]:
     """채팅 로그를 세션 단위로 파싱 (하위 호환 래퍼)"""
     parser = ChatLogParser()
-    original = settings.chunking_strategy
-    try:
-        settings.chunking_strategy = "session"
-        return parser.parse(text)
-    finally:
-        settings.chunking_strategy = original
+    return parser.parse(text, strategy="session")
 
 
 def parse_and_format(text: str) -> list[dict]:

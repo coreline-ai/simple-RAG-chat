@@ -2,6 +2,8 @@
 
 파서 팩토리를 통해 다양한 형식(채팅 로그, 엑셀)을 지원한다.
 """
+from __future__ import annotations
+
 import io
 import uuid
 from datetime import datetime, timezone
@@ -13,13 +15,17 @@ from app.schemas import DocumentListResponse, DocumentResponse, DocumentUploadRe
 from app.services.embedding import get_embeddings
 from app.services.parsers import ParserFactory
 from app.services.query_analyzer import invalidate_query_analyzer_cache
+from app.services.retrieval import invalidate_query_cache
 
 router = APIRouter(prefix="/documents", tags=["문서 관리"])
 
 
 async def _process_and_store(filename: str, content: str | bytes) -> dict:
     """문서 처리: 파서 팩토리 → 임베딩 → 메타데이터와 함께 저장"""
-    parser = ParserFactory.create(filename)
+    try:
+        parser = ParserFactory.create(filename)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 파일 형식입니다: {e}") from e
 
     if isinstance(content, bytes) and filename.endswith((".xlsx", ".xls")):
         parsed_chunks = parser.parse(io.BytesIO(content))
@@ -32,41 +38,51 @@ async def _process_and_store(filename: str, content: str | bytes) -> dict:
     doc_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
 
+    # 배치 임베딩 + ChromaDB 저장 (메타데이터 등록 전에 완료해야 원자성 유지)
+    batch_size = 50
+    try:
+        for i in range(0, len(parsed_chunks), batch_size):
+            batch = parsed_chunks[i : i + batch_size]
+
+            texts = [item["embedding_text"] for item in batch]
+            embeddings = await get_embeddings(texts)
+
+            chunk_ids = [f"{doc_id}_chunk_{i + j}" for j in range(len(batch))]
+            documents = [item["embedding_text"] for item in batch]
+            metadatas = [
+                {
+                    "document_id": doc_id,
+                    "chunk_index": i + j,
+                    "filename": filename,
+                    **item["metadata"],
+                    "original": item["original"],
+                }
+                for j, item in enumerate(batch)
+            ]
+
+            chunks_collection.add(
+                ids=chunk_ids,
+                documents=documents,
+                embeddings=embeddings,
+                metadatas=metadatas,
+            )
+    except Exception as e:
+        # 임베딩/저장 실패 시 이미 저장된 청크 정리
+        try:
+            chunks_collection.delete(where={"document_id": doc_id})
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=f"임베딩/저장 실패: {e}") from e
+
+    # 모든 청크 저장 완료 후 문서 메타데이터 등록
     add_document(doc_id, {
         "filename": filename,
         "total_chunks": len(parsed_chunks),
         "created_at": created_at,
     })
 
-    # 배치 임베딩 + ChromaDB 저장
-    batch_size = 50
-    for i in range(0, len(parsed_chunks), batch_size):
-        batch = parsed_chunks[i : i + batch_size]
-
-        texts = [item["embedding_text"] for item in batch]
-        embeddings = await get_embeddings(texts)
-
-        chunk_ids = [f"{doc_id}_chunk_{i + j}" for j in range(len(batch))]
-        documents = [item["embedding_text"] for item in batch]
-        metadatas = [
-            {
-                "document_id": doc_id,
-                "chunk_index": i + j,
-                "filename": filename,
-                **item["metadata"],
-                "original": item["original"],
-            }
-            for j, item in enumerate(batch)
-        ]
-
-        chunks_collection.add(
-            ids=chunk_ids,
-            documents=documents,
-            embeddings=embeddings,
-            metadatas=metadatas,
-        )
-
     invalidate_query_analyzer_cache()
+    invalidate_query_cache()
 
     return {
         "id": doc_id,
@@ -139,3 +155,4 @@ async def remove_document(document_id: str):
         raise HTTPException(status_code=500, detail="문서 메타데이터 삭제에 실패했습니다")
 
     invalidate_query_analyzer_cache()
+    invalidate_query_cache()

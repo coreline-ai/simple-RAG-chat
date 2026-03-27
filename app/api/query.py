@@ -1,8 +1,8 @@
 """질의(Query) API 라우터
 
-2단계 LLM 파이프라인:
-  1단계: 쿼리 분석 (QueryAnalyzer) → 필터 + 전략 자동 결정
-  2단계: 검색 결과 기반 답변 생성 (OllamaLLM)
+2단계 파이프라인:
+  1단계: 규칙 기반 쿼리 분석 (QueryAnalyzer) → 필터 + 전략 자동 결정
+  2단계: 검색 결과 기반 LLM 답변 생성
 """
 import json
 
@@ -18,9 +18,9 @@ router = APIRouter(prefix="/query", tags=["질의 응답"])
 
 @router.post("", response_model=QueryResponse)
 async def query(request: QueryRequest):
-    """질의 → LLM 쿼리 분석 → 스마트 검색 → LLM 답변 생성
+    """질의 → 규칙 기반 쿼리 분석 → 스마트 검색 → LLM 답변 생성
 
-    1. LLM이 질의 의도를 분석 (날짜/채팅방/사용자 필터 자동 추출)
+    1. 규칙 기반 분석기가 질의 의도를 분류 (날짜/채팅방/사용자 필터 자동 추출)
     2. 분석 결과에 따라 최적 검색 전략 선택 (vector/metadata/hybrid/aggregate)
     3. 검색된 컨텍스트로 LLM 답변 생성
     """

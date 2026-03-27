@@ -18,10 +18,13 @@ LLM 2회 호출은 로컬 7B 모델에서 너무 느리므로 (30초+30초),
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime, timedelta
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 from app.database import chunks_collection
 from app.services.vector_stores.base import VectorStoreFilter
 
@@ -204,7 +207,11 @@ def invalidate_query_analyzer_cache() -> None:
 
 def _get_known_metadata_values(field: str) -> list[str]:
     """ChromaDB 메타데이터에서 고유 값 목록 추출"""
-    all_data = chunks_collection.get(include=["metadatas"], limit=10000)
+    total = chunks_collection.count()
+    if total == 0:
+        return []
+
+    all_data = chunks_collection.get(include=["metadatas"], limit=total)
     values = set()
     for meta in all_data["metadatas"]:
         value = meta.get(field, "")
@@ -272,7 +279,8 @@ def _get_reference_today() -> date:
         return _reference_date_cache
 
     try:
-        all_data = chunks_collection.get(include=["metadatas"], limit=10000)
+        total = chunks_collection.count()
+        all_data = chunks_collection.get(include=["metadatas"], limit=total or 1)
         parsed_dates = []
         for meta in all_data["metadatas"]:
             raw_date = meta.get("date")
@@ -477,5 +485,5 @@ async def analyze_query(query: str) -> QueryAnalysis:
         "strategy": strategy,
     })
 
-    print(f"[쿼리분석] {analysis}")
+    logger.debug("[쿼리분석] %s", analysis)
     return analysis

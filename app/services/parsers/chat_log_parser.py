@@ -18,22 +18,49 @@ class ChatLogParser(BaseParser):
     def detect(self, filename: str) -> bool:
         return filename.endswith(".txt")
 
-    def parse(self, source: Any) -> list[dict]:
-        """텍스트를 파싱하여 청크 리스트 반환"""
+    def parse(
+        self,
+        source: Any,
+        *,
+        strategy: str | None = None,
+        session_gap_minutes: int | None = None,
+        session_max_lines: int | None = None,
+    ) -> list[dict]:
+        """텍스트를 파싱하여 청크 리스트 반환
+
+        Args:
+            source: 파싱할 텍스트
+            strategy: 청킹 전략 오버라이드. None이면 설정값 사용.
+            session_gap_minutes: 세션 간격(분) 오버라이드. None이면 설정값 사용.
+            session_max_lines: 세션 최대 라인 수 오버라이드. None이면 설정값 사용.
+        """
         text = str(source)
-        strategy = settings.chunking_strategy
+        strategy = strategy if strategy is not None else settings.chunking_strategy
 
         if strategy == "session":
-            return self._parse_sessions(text)
+            return self._parse_sessions(
+                text,
+                gap_minutes=(
+                    session_gap_minutes
+                    if session_gap_minutes is not None
+                    else settings.session_gap_minutes
+                ),
+                max_lines=(
+                    session_max_lines
+                    if session_max_lines is not None
+                    else settings.session_max_lines
+                ),
+            )
         else:
-            return self._parse_lines(text)
+            return self._parse_lines(text, strategy=strategy)
 
     # === 라인 단위 파싱 ===
 
-    def _parse_lines(self, text: str) -> list[dict]:
+    def _parse_lines(self, text: str, *, strategy: str | None = None) -> list[dict]:
         lines = text.strip().split("\n")
         results = []
-        use_kss = settings.chunking_strategy == "kss"
+        selected_strategy = strategy if strategy is not None else settings.chunking_strategy
+        use_kss = selected_strategy == "kss"
 
         for line in lines:
             line = line.strip()
@@ -80,7 +107,9 @@ class ChatLogParser(BaseParser):
 
     # === 세션 단위 파싱 ===
 
-    def _parse_sessions(self, text: str) -> list[dict]:
+    def _parse_sessions(
+        self, text: str, *, gap_minutes: int | None = None, max_lines: int | None = None,
+    ) -> list[dict]:
         lines = text.strip().split("\n")
         parsed_all: list[dict] = []
 
@@ -96,8 +125,8 @@ class ChatLogParser(BaseParser):
         if not parsed_all:
             return []
 
-        gap_minutes = settings.session_gap_minutes
-        max_lines = settings.session_max_lines
+        gap_minutes = gap_minutes if gap_minutes is not None else settings.session_gap_minutes
+        max_lines = max_lines if max_lines is not None else settings.session_max_lines
 
         groups: dict[tuple[str, str], list[dict]] = {}
         for p in parsed_all:

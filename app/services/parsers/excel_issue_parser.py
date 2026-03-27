@@ -108,12 +108,15 @@ class ExcelIssueParser(BaseParser):
 
         return data
 
-    def _build_chunks(self, row: dict, row_idx: int, id_prefix: str) -> list[dict]:
+    def _build_chunks(
+        self, row: dict, row_idx: int, id_prefix: str, *, max_chars: int | None = None,
+    ) -> list[dict]:
         """Row Chunking: 1 row → 1+ chunks
 
         스킬 원칙: "Row는 문장이 아니라 사건이다"
         기본적으로 1 row = 1 chunk. row 전체가 너무 길면 2차 KSS 분할.
         """
+        max_chars = max_chars if max_chars is not None else settings.excel_row_max_chars
         doc_id = f"{id_prefix}_{row_idx:06d}"
         metadata = self._build_metadata(row, doc_id)
 
@@ -121,7 +124,7 @@ class ExcelIssueParser(BaseParser):
         full_text = self._build_embedding_text(row)
 
         # 2차 분할 판단
-        if len(full_text) > settings.excel_row_max_chars and row.get("analysis"):
+        if len(full_text) > max_chars and row.get("analysis"):
             return self._split_row(row, full_text, metadata, doc_id)
 
         # 1 row = 1 chunk

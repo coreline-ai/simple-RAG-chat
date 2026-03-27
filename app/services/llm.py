@@ -53,6 +53,13 @@ def _get_codex_refresh_lock() -> asyncio.Lock:
     return _codex_refresh_lock
 
 
+def reset_llm_locks() -> None:
+    """asyncio Lock을 리셋 (테스트 간 이벤트 루프 전환 시 호출)"""
+    global _proxy_request_lock, _codex_refresh_lock
+    _proxy_request_lock = None
+    _codex_refresh_lock = None
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

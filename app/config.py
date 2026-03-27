@@ -43,6 +43,7 @@ class Settings(BaseSettings):
 
     # 임베딩 캐시
     embedding_cache_enabled: bool = True
+    embedding_max_concurrency: int = 3  # Ollama 동시 임베딩 요청 제한
 
     # 엑셀 이슈 데이터 설정
     excel_row_max_chars: int = 600  # 이 길이 초과 시 2차 KSS 분할
@@ -51,6 +52,10 @@ class Settings(BaseSettings):
 
     # 검색 설정
     top_k: int = 5
+    query_cache_ttl_seconds: int = 300  # 쿼리 결과 캐시 TTL (0이면 비활성)
+    search_vector_multiplier: int = 3      # vector 검색 시 top_k 배수
+    search_hybrid_multiplier: int = 4      # hybrid 검색 시 top_k 배수
+    search_metadata_multiplier: int = 5    # metadata 검색 시 top_k 배수
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

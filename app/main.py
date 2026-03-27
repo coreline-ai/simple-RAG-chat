@@ -1,4 +1,7 @@
 """FastAPI 애플리케이션 진입점"""
+import logging
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,10 +13,29 @@ from app.api.documents import router as documents_router
 from app.api.query import router as query_router
 from app.services.llm import get_llm_status, initialize_llm_runtime
 
+# 구조화된 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """앱 시작/종료 라이프사이클"""
+    logger.info("Simple RAG Chat 서버 시작")
+    await initialize_llm_runtime()
+    yield
+    logger.info("Simple RAG Chat 서버 종료")
+
+
 app = FastAPI(
     title="Simple RAG Chat",
     description="정형 채팅 로그용 RAG 시스템 (FastAPI + ChromaDB + Ollama/Proxy LLM)",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # CORS 허용 (로컬 개발용)
@@ -24,6 +46,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 요청 지연시간 로깅 미들웨어
+@app.middleware("http")
+async def log_request_latency(request, call_next):
+    start = time.monotonic()
+    response = await call_next(request)
+    elapsed_ms = (time.monotonic() - start) * 1000
+    if not request.url.path.startswith(("/static", "/favicon.ico")):
+        logger.info("%s %s %.0fms %s", request.method, request.url.path, elapsed_ms, response.status_code)
+    return response
+
+
 # 라우터 등록
 app.include_router(documents_router)
 app.include_router(query_router)
@@ -31,12 +64,6 @@ app.include_router(query_router)
 # 정적 파일 서빙
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-@app.on_event("startup")
-async def initialize_llm():
-    """선택된 LLM runtime 초기화."""
-    await initialize_llm_runtime()
 
 
 @app.get("/", tags=["상태"])

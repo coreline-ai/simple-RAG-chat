@@ -5,7 +5,8 @@
 - ExcelIssueParser: 이슈 데이터 (.xlsx)
 - ParserFactory: 파일명 기반 자동 파서 선택
 """
+from app.services.parsers import chat_log_parser, excel_issue_parser
 from app.services.parsers.base import BaseParser
 from app.services.parsers.factory import ParserFactory
 
-__all__ = ["BaseParser", "ParserFactory"]
+__all__ = ["BaseParser", "ParserFactory", "chat_log_parser", "excel_issue_parser"]
